@@ -3101,18 +3101,29 @@ button.tl-time.tap {
 }
 
 /* the unsupported-browser page: modelled on a browser's dangerous-site warning */
+
 .danger-page {
+  display: block;
   background: #7a1010;
   color: #fff;
   max-width: none;
   margin: 0;
+  width: 100%;
   padding-top: calc(var(--safe-t) + 48px);
 }
 .danger-page > * {
-  max-width: 520px;
-  margin-left: auto;
-  margin-right: auto;
+  display: block;
+  width: min(520px, 100%);
+  margin-left: auto !important;
+  margin-right: auto !important;
 }
+.danger-page .checks {
+  display: flex;
+}
+.danger-page .danger-sign {
+  display: grid;
+}
+
 .danger-sign {
   width: 56px;
   height: 56px;

@@ -87,7 +87,7 @@ export type AspectChoice = '9:16' | '4:5' | '1:1' | '5:4' | '16:9';
 export interface ExportSettings {
   aspect: AspectChoice;
   /** length of the shorter output side in pixels */
-  resolution: 480 | 720 | 1080;
+  resolution: 360 | 480 | 720 | 1080;
   /** frames per second, 1 to 60 */
   fps: number;
   quality: 'small' | 'medium' | 'high';

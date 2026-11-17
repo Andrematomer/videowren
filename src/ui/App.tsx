@@ -318,16 +318,20 @@ function Unsupported({ onProceed }: { onProceed: () => void }) {
           </li>
         ))}
       </ul>
-      <button class="link-text" aria-expanded={more} onClick={() => setMore(!more)}>
-        Advanced
-      </button>
+      <div>
+        <button class="link-text" aria-expanded={more} onClick={() => setMore(!more)}>
+          Advanced
+        </button>
+      </div>
       {more && (
         <div class="danger-more">
           <p>VideoWren cannot protect your work in this browser. It may crash, lose your project, or export broken files.</p>
           <pre>{browserInfo()}</pre>
-          <a class="link-text" href="#" onClick={(e) => (e.preventDefault(), onProceed())}>
-            Proceed to VideoWren (unsafe)
-          </a>
+          <div>
+            <a class="link-text" href="#" onClick={(e) => (e.preventDefault(), onProceed())}>
+              Proceed to VideoWren (unsafe)
+            </a>
+          </div>
         </div>
       )}
     </main>

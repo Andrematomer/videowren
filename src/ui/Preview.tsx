@@ -1007,6 +1007,14 @@ type Handle = 'tl' | 'tr' | 'br' | 'bl' | 'l' | 't' | 'r' | 'b' | 'rot';
 
 /** fingers on the screen right now (any element), and whether one of them is on the transform box */
 const fingers = new Set<number>();
+/** fingers down anywhere right now: the transform box mounts after a touch that picked the picture, and must know a finger is already on it */
+let downNow = 0;
+if (typeof window !== 'undefined') {
+  window.addEventListener('pointerdown', () => void downNow++, true);
+  const lift = () => void (downNow = Math.max(0, downNow - 1));
+  window.addEventListener('pointerup', lift, true);
+  window.addEventListener('pointercancel', lift, true);
+}
 const fingerAt = new Map<number, { x: number; y: number }>();
 let adoptFingers: ((list: { id: number; x: number; y: number }[]) => void) | null = null;
 let onBox = 0;
@@ -1024,7 +1032,7 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const clip = useStore((s) => s.project.clips[s.selected]);
   const media = useStore((s) => (s.project.clips[s.selected] ? s.project.media[s.project.clips[s.selected]!.mediaId] : undefined));
   const [drag, setDrag] = useState<{ view: View; crop: Crop } | null>(null);
-  const [quiet, setQuiet] = useState(false);
+  const [quiet, setQuiet] = useState(downNow > 0);
   // while fingers work on the picture the outline stays and follows it; only the handles step aside
   const [liveV, setLiveV] = useState<View | null>(null);
   const [liveC, setLiveC] = useState<Crop | null>(null);

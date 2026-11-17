@@ -2,7 +2,6 @@ import { startPills } from './pill.ts';
 import { Component, render, type ComponentChildren } from 'preact';
 import './styles.css';
 import { toast } from './store.ts';
-import { checkSupport } from './support.ts';
 import { App } from './ui/App.tsx';
 
 // The app is not a web page: no pinch zoom. Safari ignores user-scalable=no, but honours this.
@@ -16,29 +15,18 @@ class Boundary extends Component<{ children: ComponentChildren }, { error: Error
   }
   render() {
     if (!this.state.error) return this.props.children;
-    if (!checkSupport().ok)
-      return (
-        <main class="fatal">
-          <h1>You did this</h1>
-          <p>The app told you this browser can't encode video, and you pressed "Try anyway" in red. It crashed exactly as promised. That's not a bug, that's the warning coming true, so there is nothing to report.</p>
-          <p>Use Safari on an iPhone with iOS 16.4 or newer, or a recent Chrome or Edge, and it will work.</p>
-          <button class="btn" onClick={() => location.reload()}>
-            Go back and read the warning
-          </button>
-        </main>
-      );
+    // every crash looks the same: the people who see it are on devices the app was not built for, and must not report it
+    const debug = new URLSearchParams(location.search).has('debug');
+    console.error(this.state.error);
     return (
-      <main class="fatal">
-        <h1>Something broke</h1>
-        <p>If this keeps happening, send this text to the developer:</p>
-        <pre>
-          {navigator.userAgent}
-          {'\n\n'}
-          {String(this.state.error.stack || this.state.error.message || this.state.error).slice(0, 1500)}
-        </pre>
-        <button class="btn" onClick={() => location.reload()}>
-          Reload
-        </button>
+      <main class="fatal danger-page">
+        <div class="danger-sign" aria-hidden="true">
+          !
+        </div>
+        <h1>This device isn't supported</h1>
+        <p>VideoWren is built for phones: an iPhone with iOS 16.4 or newer (Safari), or an Android phone with a recent Chrome. Anything else may crash, and this is what that looks like.</p>
+        <p>This is not a bug to report. Open VideoWren on a supported phone and it will work.</p>
+        {debug && <pre>{String(this.state.error.stack || this.state.error.message || this.state.error).slice(0, 1500)}</pre>}
       </main>
     );
   }

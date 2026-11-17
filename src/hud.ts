@@ -50,7 +50,7 @@ if (typeof window !== 'undefined') {
     fingers.delete(e.pointerId);
   };
   window.addEventListener('pointerdown', track, true);
-  window.addEventListener('pointermove', (e) => (fingers.has(e.pointerId) ? track(e) : e.pointerType === 'mouse' && (last = { x: e.clientX, y: e.clientY })), true);
+  window.addEventListener('pointermove', (e) => (fingers.has(e.pointerId) ? track(e) : e.pointerType !== 'touch' && (last = { x: e.clientX, y: e.clientY })), true);
   window.addEventListener('pointerup', gone, true);
   window.addEventListener('pointercancel', gone, true);
 }

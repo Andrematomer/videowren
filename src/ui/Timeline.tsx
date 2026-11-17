@@ -63,6 +63,9 @@ export function lanesFor(clips: Clip[], extra = { hi: 0, lo: 0 }): number[] {
  * 1. Tap a strip to select it (tap it again for its options). Hold a strip until it lifts, then drag it
  * in time or between lanes. A selected strip has handles on both ends: drag them to trim. Pinch to zoom.
  */
+/** only strips that have a running time (video, sound) can slide their content: pictures, text and colors have none */
+const slippable = (m: { kind?: string; text?: unknown; solid?: unknown } | undefined): boolean => !!m && m.kind !== 'image' && m.text === undefined && m.solid === undefined;
+
 export function Timeline() {
   const clips = useStore((s) => s.project.clips);
   const media = useStore((s) => s.project.media);
@@ -148,10 +151,16 @@ export function Timeline() {
     const t = Math.max(0, Math.min(totalOf(live.current.clips), el.scrollLeft / live.current.pps));
     if (Math.abs(t - live.current.playhead) * live.current.pps < 1.5) return;
     if (getState().playing) engine.pause();
+    // the line is pulled to the start and end of every strip, like a strip being moved (a few pixels of magnet)
+    let at = t;
+    let best = 7 / live.current.pps;
+    for (const c of live.current.clips) {
+      for (const e of [c.at, c.at + clipDuration(c)]) if (Math.abs(e - t) < best) (best = Math.abs(e - t)), (at = e);
+    }
     // moving around the timeline by hand leaves nothing selected (a strip being dragged or trimmed stays)
     const g = getState();
     if ((g.selected >= 0 || g.gap) && g.multi.length === 0 && !st.current?.active && !trimRef.current && !boxRef.current?.active) deselect();
-    set({ playhead: t });
+    set({ playhead: at });
     if (!seekFrame.current)
       seekFrame.current = requestAnimationFrame(() => {
         seekFrame.current = 0;
@@ -170,7 +179,7 @@ export function Timeline() {
     const dist = (e: TouchEvent) => Math.hypot(e.touches[0]!.clientX - e.touches[1]!.clientX, e.touches[0]!.clientY - e.touches[1]!.clientY);
     const start = (e: TouchEvent) => {
       trail = [];
-      lock = e.touches.length === 1 ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY, pps0: live.current.pps, axis: null } : null;
+      lock = e.touches.length === 1 && !(e.target as Element).closest('.strip-clip') ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY, pps0: live.current.pps, axis: null } : null;
       if (e.touches.length === 2) {
         lock = null;
         pinch = { d0: dist(e), pps0: live.current.pps };
@@ -191,6 +200,7 @@ export function Timeline() {
         const dy = e.touches[0]!.clientY - lock.y;
         if (lock.axis === null) lock.axis = Math.abs(dy) > Math.abs(dx) * 1.2 && el.scrollHeight <= el.clientHeight + 2 ? 'y' : 'x';
         if (lock.axis === 'y') {
+          trail = []; // the sideways trail from before the zoom is about another zoom level
           e.preventDefault();
           pinching.current = true; // the scroll that follows a zoom is not a seek
           el.style.overflowX = 'hidden'; // sideways is off for the rest of this drag
@@ -203,7 +213,13 @@ export function Timeline() {
       }
     };
     const end = (e: TouchEvent) => {
-      if (lock?.axis === 'y' && e.touches.length === 0) requestAnimationFrame(() => ((el.style.overflowX = ''), (pinching.current = false)));
+      if (lock?.axis === 'y') trail = [];
+      if (lock?.axis === 'y' && e.touches.length === 0)
+        requestAnimationFrame(() => {
+          el.style.overflowX = '';
+          el.scrollLeft = getState().playhead * live.current.pps; // re-pin: the line must still be on the same moment
+          requestAnimationFrame(() => (pinching.current = false));
+        });
       if (e.touches.length === 0) lock = null;
       if (e.touches.length < 2) (pinch = null, (pinching.current = false));
       if (e.touches.length === 0 && trail.length) {
@@ -469,7 +485,7 @@ export function Timeline() {
     {
       const g = getState();
       const c0 = clips[i];
-      if (g.handles && g.selected === i && g.multi.length === 0 && c0 && g.project.media[c0.mediaId]?.kind === 'video' && !(e.target as Element).closest('.trim-h')) {
+      if (g.handles && g.selected === i && g.multi.length === 0 && c0 && slippable(g.project.media[c0.mediaId]) && !(e.target as Element).closest('.trim-h')) {
         slipRef.current = { id: e.pointerId, i, x0: e.clientX, y0: e.clientY, base: { start: c0.start, end: c0.end }, active: false, cur: { start: c0.start, end: c0.end } };
         return;
       }
@@ -912,7 +928,7 @@ export function Timeline() {
                   key={c.id}
                   role="option"
                   aria-selected={on}
-                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${m?.kind === 'video' ? 'vid' : ''}`}
+                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''}`}
                   style={{ left: `${padL + at * pps}px`, top: `${top}px`, width: `${w}px`, height: `${ROW}px`, ...(m?.solid ? { background: m.solid } : {}) }}
                   onPointerDown={down(i)}
                   onPointerMove={onMove}

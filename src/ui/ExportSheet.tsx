@@ -148,6 +148,7 @@ export function ExportSheet({ onClose }: { onClose: () => void }) {
                 { label: '1080p', value: 1080 },
                 { label: '720p', value: 720 },
                 { label: '480p', value: 480 },
+                { label: '360p', value: 360 },
               ]}
             />
           </section>
@@ -198,7 +199,7 @@ export function ExportSheet({ onClose }: { onClose: () => void }) {
               </div>
             )}
             <p class="hint num">
-              {size.w}×{size.h}, MP4{showSlider ? ` · ${fmtMbps(vbps)}` : ''}
+              {size.w}×{size.h}, MP4
               {longest > 0 && ` · up to about ${fmtBytes(estimateBytes(vbps, longest, withSound))}${parts.length > 1 ? ' per file' : ''}`}
             </p>
           </section>
