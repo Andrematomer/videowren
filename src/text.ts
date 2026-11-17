@@ -1,0 +1,96 @@
+/** Renders a piece of text into a transparent picture, so it can be placed like any other picture. */
+export const TEXT_COLORS = ['#ffffff', '#f6d04d', '#ff5d5d', '#6ee7a8', '#6db3ff', '#000000'] as const;
+
+export const TEXT_FONTS: { key: string; name: string; css: string; weight: number }[] = [
+  { key: 'sans', name: 'Sans', css: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif', weight: 700 },
+  { key: 'serif', name: 'Serif', css: 'Georgia, "Times New Roman", Times, serif', weight: 700 },
+  { key: 'mono', name: 'Mono', css: 'ui-monospace, "SF Mono", Menlo, Consolas, "Courier New", monospace', weight: 700 },
+  { key: 'impact', name: 'Impact', css: 'Impact, "Haettenschweiler", "Arial Narrow Bold", "Arial Black", sans-serif', weight: 400 },
+  { key: 'round', name: 'Rounded', css: 'ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Varela Round", Nunito, system-ui, sans-serif', weight: 800 },
+  { key: 'hand', name: 'Handwritten', css: '"Bradley Hand", "Segoe Print", "Comic Sans MS", "Chalkboard SE", cursive', weight: 700 },
+];
+
+export interface TextLook {
+  color: string;
+  font: string;
+  outline: string;
+  width: number;
+}
+
+/** the outline color that reads best on a text color */
+export const autoOutline = (color: string): string => (color.toLowerCase() === '#000000' ? '#ffffff' : '#000000');
+
+/** Longest side, in pixels, that a text picture may have: big enough to stay sharp when scaled up, small enough to be cheap. */
+const TEXT_MAX_SIDE = 3072;
+
+export async function renderText(text: string, color: string, fontKey = 'sans', outline = autoOutline(color), outlineWidth = 14): Promise<{ blob: Blob; bitmap: ImageBitmap; width: number; height: number; scale: number; box: { l: number; t: number; r: number; b: number } }> {
+  const lines = text.split('\n').map((l) => l.trimEnd());
+  while (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  const f = TEXT_FONTS.find((x) => x.key === fontKey) ?? TEXT_FONTS[0]!;
+  const font = `${f.weight} 120px ${f.css}`;
+  const probe = document.createElement('canvas').getContext('2d')!;
+  probe.font = font;
+  const widest = Math.max(40, ...lines.map((l) => probe.measureText(l).width));
+  const lineH = 150;
+  const pad = 50 + Math.ceil(outlineWidth / 2);
+  // size in font units (120 px font); the picture itself is drawn up to 3 times larger
+  probe.textBaseline = 'middle';
+  probe.textAlign = 'center';
+  const uw = Math.ceil(widest + pad * 2);
+  const uh = Math.ceil(lines.length * lineH + pad * 2);
+  const scale = Math.max(0.5, Math.min(3, TEXT_MAX_SIDE / Math.max(uw, uh)));
+  const width = Math.max(2, Math.round(uw * scale));
+  const height = Math.max(2, Math.round(uh * scale));
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = height;
+  const g = c.getContext('2d')!;
+  g.scale(width / uw, height / uh);
+  g.font = font;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineJoin = 'round';
+  lines.forEach((l, i) => {
+    const y = pad + lineH * i + lineH / 2;
+    // an outline around the letters keeps the text readable on any picture
+    if (outlineWidth > 0) {
+      g.lineWidth = outlineWidth;
+      g.strokeStyle = outline;
+      g.strokeText(l, uw / 2, y);
+    }
+    g.fillStyle = color;
+    g.fillText(l, uw / 2, y);
+  });
+  const blob = await new Promise<Blob>((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('no picture'))), 'image/png'));
+  const bitmap = await createImageBitmap(blob);
+  // where the ink really is (letters like l and y reach further than a, e, m), outline included
+  let x0 = uw;
+  let x1 = 0;
+  let y0 = uh;
+  let y1 = 0;
+  const half = outlineWidth / 2;
+  lines.forEach((l, i) => {
+    if (!l.trim()) return;
+    const m = probe.measureText(l);
+    const y = pad + lineH * i + lineH / 2;
+    x0 = Math.min(x0, uw / 2 - m.actualBoundingBoxLeft - half);
+    x1 = Math.max(x1, uw / 2 + m.actualBoundingBoxRight + half);
+    y0 = Math.min(y0, y - m.actualBoundingBoxAscent - half);
+    y1 = Math.max(y1, y + m.actualBoundingBoxDescent + half);
+  });
+  const ok = x1 > x0 && y1 > y0;
+  const box = ok ? { l: Math.max(0, x0 / uw), t: Math.max(0, y0 / uh), r: Math.max(0, 1 - x1 / uw), b: Math.max(0, 1 - y1 / uh) } : { l: 0, t: 0, r: 0, b: 0 };
+  return { blob, bitmap, width, height, scale: width / uw, box };
+}
+
+/** A small flat picture of one color (a "color" clip); it is scaled up to cover the canvas. */
+export async function renderSolid(color: string, width = 64, height = 64): Promise<{ blob: Blob; bitmap: ImageBitmap; width: number; height: number }> {
+  const c = document.createElement('canvas');
+  c.width = width;
+  c.height = height;
+  const g = c.getContext('2d')!;
+  g.fillStyle = color;
+  g.fillRect(0, 0, width, height);
+  const blob = await new Promise<Blob>((resolve, reject) => c.toBlob((b) => (b ? resolve(b) : reject(new Error('no picture'))), 'image/png'));
+  return { blob, bitmap: await createImageBitmap(blob), width, height };
+}

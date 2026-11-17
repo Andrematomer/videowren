@@ -1,0 +1,446 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { IDENTITY_VIEW, baseScale, clampView, snapEightCropped, dragView, fillZoom, fitZoom, frameTransform, nearestAspect, snapEight, normAngle, outputSize, pinchView, quarterTurned, snapView } from '../src/geometry.ts';
+import { gradePixel } from '../src/layers.ts';
+import { overwriteOverlaps, clipEnd, activeAt, endOfTrack, freeTrack, gapAt, laneRemovable, optimizeLanes, removeGap, removeLane, resolveOverlaps, settleAt, planParts, sourceAt, totalOf } from '../src/timeline.ts';
+import { resample, timeStretch } from '../src/stretch.ts';
+import { MAX_MBPS, MIN_MBPS, RATE_STOPS, autoBitrate, estimateBytes, fmtMbps, videoBitrate } from '../src/bitrate.ts';
+import { emptyProject, type Clip } from '../src/types.ts';
+
+const close = (a: number, b: number, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} !~ ${b}`);
+
+const view = (o: Partial<typeof IDENTITY_VIEW> = {}) => ({ ...IDENTITY_VIEW, ...o });
+
+test('default view: the whole picture fits and sits in the middle', () => {
+  const t = frameTransform(1920, 1080, { outW: 1080, outH: 1920, view: view() });
+  close(t.tx, 540);
+  close(t.ty, 960);
+  close(t.scale, 1080 / 1920);
+  close(baseScale(1920, 1080, 1080, 1920), 0.5625);
+});
+
+test('fit and fill zoom: bars versus trimmed edges, also when turned', () => {
+  // 16:9 picture on a 9:16 canvas
+  close(fitZoom(1920, 1080, 0, 1080, 1920), 1);
+  close(fillZoom(1920, 1080, 0, 1080, 1920), 1920 / 1080 / (1080 / 1920), 1e-9);
+  // turned a quarter, the same picture fills a portrait canvas exactly
+  close(fitZoom(1920, 1080, 90, 1080, 1920), fillZoom(1920, 1080, 90, 1080, 1920));
+  assert.ok(fitZoom(1920, 1080, 90, 1080, 1920) > 1);
+});
+
+test('dragView moves by canvas fractions', () => {
+  const v = dragView(view(), 200, 400, 20, -40);
+  close(v.x, 0.1);
+  close(v.y, -0.1);
+});
+
+test('pinchView: pinch zooms, twist turns, both about the point between the fingers', () => {
+  // fingers 100 apart horizontally, then 200 apart: zoom doubles, centre stays
+  const a0 = { x: -50, y: 0 };
+  const b0 = { x: 50, y: 0 };
+  const z = pinchView(view(), 400, 400, a0, b0, { x: -100, y: 0 }, { x: 100, y: 0 });
+  close(z.zoom, 2);
+  close(z.x, 0);
+  close(z.rot, 0);
+  // twist a quarter turn clockwise (screen y points down)
+  const t = pinchView(view(), 400, 400, a0, b0, { x: 0, y: -50 }, { x: 0, y: 50 });
+  close(normAngle(t.rot), 90);
+  close(t.zoom, 1);
+  // a picture off to the right swings round the fingers' midpoint
+  const off = pinchView(view({ x: 0.25 }), 400, 400, a0, b0, { x: 0, y: -50 }, { x: 0, y: 50 });
+  close(off.x * 400, 0, 1e-6);
+  close(off.y * 400, 100, 1e-6);
+});
+
+test('snapView: centre, quarter turns, fit and fill pull in; far values are left alone', () => {
+  const env = { sw: 1920, sh: 1080, W: 360, H: 640 };
+  const s = snapView(view({ x: 0.01, y: -0.008, rot: 87, zoom: fitZoom(1920, 1080, 90, 360, 640) * 1.01 }), env);
+  assert.equal(s.view.x, 0);
+  assert.equal(s.view.y, 0);
+  assert.equal(s.view.rot, 90);
+  assert.equal(s.zoom, 'fit');
+  close(s.view.zoom, fitZoom(1920, 1080, 90, 360, 640));
+  const far = snapView(view({ x: 0.2, y: 0.2, rot: 40, zoom: 3 }), env);
+  assert.equal(far.view.x, 0.2);
+  assert.equal(far.view.rot, 40);
+  assert.equal(far.view.zoom, 3);
+  assert.equal(far.rot, null);
+  const fill = snapView(view({ zoom: fillZoom(1920, 1080, 0, 360, 640) * 0.99 }), env);
+  assert.equal(fill.zoom, 'fill');
+});
+
+test('normAngle and quarterTurned', () => {
+  close(normAngle(270), -90);
+  close(normAngle(-181), 179);
+  assert.deepEqual(quarterTurned(10, 20, 90), { w: 20, h: 10 });
+  assert.deepEqual(quarterTurned(10, 20, -90), { w: 20, h: 10 });
+  assert.deepEqual(quarterTurned(10, 20, 180), { w: 10, h: 20 });
+  assert.deepEqual(quarterTurned(10, 20, 30), { w: 10, h: 20 });
+});
+
+test('outputSize: presets are even-sized', () => {
+  const p = emptyProject();
+  p.settings.resolution = 1080;
+  p.settings.aspect = '4:5';
+  assert.deepEqual(outputSize(p), { w: 1080, h: 1350 });
+  p.settings.aspect = '16:9';
+  assert.deepEqual(outputSize(p), { w: 1920, h: 1080 });
+  p.settings.resolution = 720;
+  p.settings.aspect = '9:16';
+  assert.deepEqual(outputSize(p), { w: 720, h: 1280 });
+});
+
+test('nearestAspect: picks the canvas that suits the first picture', () => {
+  assert.equal(nearestAspect(1080, 1920), '9:16');
+  assert.equal(nearestAspect(1920, 1080), '16:9');
+  assert.equal(nearestAspect(1000, 1000), '1:1');
+  assert.equal(nearestAspect(1080, 1350), '4:5');
+});
+
+test('timeline: clips sit at their own start, lanes stack, speed changes length', () => {
+  const mk = (id: string, start: number, end: number, speed: number, at: number, track: number): Clip => ({ id, mediaId: 'a', start, end, speed, view: IDENTITY_VIEW, volume: 1, keepPitch: true, at, track });
+  const clips = [mk('1', 0, 10, 2, 0, 0), mk('2', 5, 8, 1, 5, 0), mk('3', 0, 4, 1, 3, 1), mk('4', 0, 4, 1, 20, -1)];
+  close(totalOf(clips), 24);
+  assert.deepEqual(activeAt(clips, 4), [0, 2]); // lane 0 below lane 1
+  assert.deepEqual(activeAt(clips, 6), [1, 2]);
+  assert.deepEqual(activeAt(clips, 10), []); // a gap
+  assert.deepEqual(activeAt(clips, 21), [3]);
+  close(endOfTrack(clips, 0), 8);
+  close(endOfTrack(clips, 7), 0);
+  close(sourceAt(clips[0]!, 2), 4); // 2 s in at double speed = 4 s into the source
+  assert.ok(sourceAt(clips[0]!, 99) < 10); // never past the trim
+});
+
+test('planParts: fixed length, remainder last', () => {
+  const p = planParts(150, 60, false, 30);
+  assert.equal(p.length, 3);
+  assert.deepEqual(p.map((x) => x.end - x.start), [60, 60, 30]);
+  assert.equal(p[0]!.endFrame, p[1]!.startFrame); // no frame lost or doubled at the seams
+  assert.equal(p[2]!.endFrame, 150 * 30);
+});
+
+test('planParts: equal parts all stay under the limit', () => {
+  const p = planParts(130, 60, true, 30);
+  assert.equal(p.length, 3);
+  for (const x of p) assert.ok(x.end - x.start <= 60 + 1e-9);
+  close(p[0]!.end - p[0]!.start, 130 / 3, 0.04);
+  assert.equal(p[2]!.endFrame, 130 * 30);
+});
+
+test('planParts: short video is one file, exact multiple has no empty tail, off = one file', () => {
+  assert.equal(planParts(45, 60, false, 30).length, 1);
+  assert.equal(planParts(120, 60, false, 30).length, 2);
+  assert.equal(planParts(120.0000001, 60, false, 30).length, 2);
+  assert.equal(planParts(500, null, false, 30).length, 1);
+  assert.equal(planParts(0, 60, false, 30).length, 0);
+});
+
+/** frequency estimate from upward zero crossings */
+function freq(x: Float32Array, rate: number): number {
+  let z = 0;
+  for (let i = 1; i < x.length; i++) if (x[i - 1]! < 0 && x[i]! >= 0) z++;
+  return z / (x.length / rate);
+}
+
+const sine = (f: number, rate: number, secs: number) => {
+  const a = new Float32Array(Math.round(rate * secs));
+  for (let i = 0; i < a.length; i++) a[i] = 0.6 * Math.sin((2 * Math.PI * f * i) / rate);
+  return a;
+};
+
+test('timeStretch keeps pitch and scales length (2x faster, 0.5x slower)', () => {
+  const rate = 48000;
+  const input = [sine(440, rate, 3), sine(440, rate, 3)];
+  for (const speed of [2, 0.5, 1.5, 4]) {
+    const out = timeStretch(input, rate, speed);
+    close(out[0]!.length / rate, 3 / speed, 0.01);
+    const body = out[0]!.subarray(Math.round(rate * 0.1), out[0]!.length - Math.round(rate * 0.1));
+    const f = freq(body, rate);
+    assert.ok(Math.abs(f - 440) < 12, `speed ${speed}: ${f} Hz`);
+    // no big holes: every 50 ms window carries energy
+    const win = rate * 0.05;
+    for (let i = rate * 0.1; i + win < out[0]!.length - rate * 0.1; i += win) {
+      let e = 0;
+      for (let j = 0; j < win; j++) e += out[0]![i + j]! ** 2;
+      assert.ok(Math.sqrt(e / win) > 0.25, `speed ${speed}: dip at ${i / rate}s`);
+    }
+  }
+});
+
+test('timeStretch is a no-op at speed 1', () => {
+  const input = [sine(300, 48000, 0.5)];
+  assert.equal(timeStretch(input, 48000, 1), input);
+});
+
+test('bitrate: a target overrides the quality preset, is clamped, and null falls back to auto', () => {
+  const base = { quality: 'medium' as const, fps: 30 as const };
+  assert.equal(videoBitrate({ ...base, bitrateMbps: 4 }, 1080, 1920), 4_000_000);
+  assert.equal(videoBitrate({ ...base, bitrateMbps: 2.5 }, 480, 854), 2_500_000);
+  assert.equal(videoBitrate({ ...base, bitrateMbps: 9999 }, 1080, 1920), MAX_MBPS * 1_000_000);
+  assert.equal(videoBitrate({ ...base, bitrateMbps: 0.01 }, 1080, 1920), MIN_MBPS * 1_000_000);
+  assert.equal(videoBitrate({ ...base, bitrateMbps: null }, 1080, 1920), autoBitrate(1080, 1920, 30, 'medium'));
+  assert.ok(autoBitrate(1080, 1920, 30, 'high') > autoBitrate(1080, 1920, 30, 'small'));
+  assert.ok(autoBitrate(64, 64, 30, 'small') >= 250_000);
+  // the presets are 1 / 2 / 4 Mbps at 1080p30 and scale with pixels and frame rate
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) / b < 0.01, `${a} vs ${b}`);
+  near(autoBitrate(1920, 1080, 30, 'small'), 1_000_000);
+  near(autoBitrate(1920, 1080, 30, 'medium'), 2_000_000);
+  near(autoBitrate(1920, 1080, 30, 'high'), 4_000_000);
+  near(autoBitrate(1920, 1080, 60, 'medium'), 4_000_000);
+  near(autoBitrate(1280, 720, 30, 'medium'), 888_889);
+});
+
+test('bitrate: size estimate and label', () => {
+  // 4 Mbps video + 128 kbps audio for 60 s (below 3 Mbps the sound is 96 kbps)
+  assert.equal(estimateBytes(4_000_000, 60, true), Math.round((4_128_000 * 60) / 8));
+  assert.equal(estimateBytes(1_000_000, 60, true), Math.round((1_096_000 * 60) / 8));
+  assert.equal(estimateBytes(4_000_000, 60, false), 30_000_000);
+  assert.equal(fmtMbps(4_000_000), '4 Mbps');
+  assert.equal(fmtMbps(2_500_000), '2.5 Mbps');
+  assert.equal(fmtMbps(12_000_000), '12 Mbps');
+});
+
+test('resample: pitch follows speed, length scales, speed 1 is a no-op', () => {
+  const rate = 48000;
+  const input = [sine(440, rate, 2)];
+  const out = resample(input, 2);
+  close(out[0]!.length / rate, 1, 0.01);
+  const f = freq(out[0]!, rate);
+  assert.ok(Math.abs(f - 880) < 20, `${f} Hz`);
+  assert.equal(resample(input, 1), input);
+});
+
+test('bitrate slider marks run 0.25 to 16 Mbps, each double the last, inside the limits', () => {
+  assert.deepEqual([...RATE_STOPS], [0.25, 0.5, 1, 2, 4, 8, 16]);
+  assert.equal(MIN_MBPS, 0.25);
+  for (let i = 1; i < RATE_STOPS.length; i++) assert.ok(RATE_STOPS[i]! > RATE_STOPS[i - 1]!);
+  assert.ok(RATE_STOPS[RATE_STOPS.length - 1]! <= MAX_MBPS);
+});
+
+test('split is off by default', () => {
+  assert.equal(emptyProject().settings.splitSeconds, null);
+});
+
+test('snapEight: goes to the closest of the eight tidy placements, and flips fit/fill when already there', () => {
+  const W = 360, H = 640;
+  // a 16:9 picture turned about 78° and made small: becomes the quarter turn at 90° that fits
+  const v = snapEight({ x: 0.02, y: 0, zoom: 0.3, rot: 78 }, 1920, 1080, W, H);
+  assert.equal(v.rot, 90);
+  assert.ok(Math.abs(v.zoom - fitZoom(1920, 1080, 90, W, H)) < 1e-9);
+  assert.deepEqual([v.x, v.y], [0, 0]);
+  // tapping again on a tidy placement switches to the other zoom
+  const w = snapEight(v, 1920, 1080, W, H);
+  assert.ok(Math.abs(w.zoom - fillZoom(1920, 1080, 90, W, H)) < 1e-9);
+  // 5:4 exists
+  assert.equal(nearestAspect(1280, 1024), '5:4');
+});
+
+test('snapView: sides of the picture catch on the sides of the frame', () => {
+  const env = { sw: 1000, sh: 1000, W: 360, H: 640 };
+  // zoom 0.5 of "fits": a 180 px square (width of the frame / 2); its left side 3 px off the frame's left side
+  const z = 0.5;
+  const half = (1000 * (Math.min(360 / 1000, 640 / 1000) * z)) / 2;
+  const x = (half - 180 + 3) / 360;
+  const s = snapView({ x, y: 0.3, zoom: z, rot: 0 }, env);
+  assert.ok(s.edge);
+  assert.ok(Math.abs(s.view.x * 360 - (half - 180)) < 1e-9);
+});
+
+const mk = (id: string, at: number, dur: number, track: number): Clip => ({ id, mediaId: 'm', start: 0, end: dur, speed: 1, view: view(), volume: 1, keepPitch: true, at, track });
+
+test('gapAt: finds the empty stretch between two clips of a lane, not on a clip or after the last', () => {
+  const cs = [mk('a', 0, 2, 0), mk('b', 5, 2, 0)];
+  assert.deepEqual(gapAt(cs, 0, 3), { track: 0, from: 2, to: 5 });
+  assert.equal(gapAt(cs, 0, 1), null);
+  assert.equal(gapAt(cs, 0, 8), null);
+  assert.deepEqual(gapAt([mk('c', 4, 1, 0)], 0, 1), { track: 0, from: 0, to: 4 });
+});
+
+test('removeGap: later clips move earlier on every lane, collisions hop to the next free lane', () => {
+  // lane 0 has a 3 s gap (2..5). Lane 1: x (2..6) straddles the gap and stays, y (6..9) would land on 3..6 on top of x
+  const cs = [mk('a', 0, 2, 0), mk('b', 5, 2, 0), mk('x', 2, 4, 1), mk('y', 6, 3, 1)];
+  const out = removeGap(cs, { track: 0, from: 2, to: 5 });
+  const by = (id: string) => out.find((c) => c.id === id)!;
+  assert.equal(by('b').at, 2);
+  assert.equal(by('b').track, 0);
+  assert.equal(by('y').at, 3);
+  assert.equal(by('y').track, 2);
+  assert.equal(by('x').at, 2);
+  assert.equal(by('x').track, 1);
+  // sound lanes hop downwards
+  const au = [mk('v', 3, 1, 0), mk('p', 1, 4, -1), mk('q', 5, 1, -1)];
+  const o2 = removeGap(au, { track: 0, from: 0, to: 3 });
+  assert.equal(o2.find((c) => c.id === 'q')!.at, 2);
+  assert.equal(o2.find((c) => c.id === 'q')!.track, -2);
+  assert.equal(o2.find((c) => c.id === 'p')!.at, 1);
+});
+
+test('removeGap: a later clip that fits its own lane is not pushed away by an earlier hop', () => {
+  // y (6..9) must hop to lane 2 (x blocks lane 1 at 3..6), but z (9..12) fits lane 1 after the move and must stay there
+  const cs = [mk('a', 0, 2, 0), mk('b', 5, 2, 0), mk('x', 2, 4, 1), mk('y', 6, 3, 1), mk('z', 9, 3, 1)];
+  const out = removeGap(cs, { track: 0, from: 2, to: 5 });
+  const by = (id: string) => out.find((c) => c.id === id)!;
+  assert.equal(by('y').track, 2);
+  assert.equal(by('z').track, 1);
+  assert.equal(by('z').at, 6);
+});
+
+test('clampView: up to 90% of the picture may leave the frame', () => {
+  const env = { sw: 1000, sh: 1000, W: 360, H: 640 };
+  const v = clampView({ x: 5, y: 0, zoom: 1, rot: 0 }, env);
+  const half = 360 / 2; // the picture is 360 wide at zoom 1
+  // its center may sit W/2 + 0.8 * half away: 10% of its width stays in
+  close(v.x * 360, 180 + 0.8 * half);
+  // without an env the center stays on the canvas
+  close(clampView({ x: 5, y: 0, zoom: 1, rot: 0 }).x, 0.5);
+});
+
+test('gradePixel: zero grade is the identity, brightness and saturation behave', () => {
+  const g0 = { brightness: 0, contrast: 0, saturation: 0, warmth: 0 };
+  const px: [number, number, number] = [0.2, 0.5, 0.8];
+  gradePixel(px, g0).forEach((v, i) => close(v, px[i]!, 1e-9));
+  assert.deepEqual(gradePixel([0.5, 0.5, 0.5], { ...g0, saturation: -1 }).map((v) => +v.toFixed(6)), [0.5, 0.5, 0.5]);
+  const gray = gradePixel([1, 0, 0], { ...g0, saturation: -1 });
+  close(gray[0], gray[1]);
+  assert.ok(gradePixel([0.5, 0.5, 0.5], { ...g0, brightness: 0.4 })[0] > 0.6);
+  assert.ok(gradePixel([0.5, 0.5, 0.5], { ...g0, warmth: 0.5 })[0] > gradePixel([0.5, 0.5, 0.5], { ...g0, warmth: 0.5 })[2]);
+});
+
+test('freeTrack: a clip dropped on another one goes to the next free lane, away from 0', () => {
+  const others = [mk('a', 0, 4, 0), mk('b', 0, 4, 1), mk('c', 0, 4, -1)];
+  assert.equal(freeTrack(others, 1, 2, 0), 2);
+  assert.equal(freeTrack(others, 4, 2, 0), 0); // touching is not overlapping
+  assert.equal(freeTrack(others, 1, 2, -1), -2);
+  assert.equal(freeTrack(others, 1, 2, 5), 5);
+});
+
+test('snapEightCropped: fits the part left after a crop and centers it', () => {
+  const W = 360, H = 640;
+  const crop = { l: 0.5, t: 0, r: 0, b: 0 }; // the right half of a 1000x1000 picture stays
+  const v = snapEightCropped({ x: 0, y: 0, zoom: 1, rot: 0 }, crop, 1000, 1000, W, H);
+  // the kept half is 500 x 1000: it fits when its height is 640 -> scale .64, or its width 500*s <= 360
+  const sc = baseScale(1000, 1000, W, H) * v.zoom;
+  assert.ok(Math.abs(500 * sc - 360) < 1e-6 || Math.abs(1000 * sc - 640) < 1e-6);
+  // the middle of the kept half (a quarter of the width right of the picture's middle) is on the canvas middle
+  close(v.x * W + 250 * sc, 0, 1e-6);
+  assert.equal(snapEightCropped({ x: 0, y: 0, zoom: 1, rot: 0 }, undefined, 1000, 1000, W, H).x, snapEight({ x: 0, y: 0, zoom: 1, rot: 0 }, 1000, 1000, W, H).x);
+});
+
+test('settleAt: a strip dropped a hair from a neighbour sits flush, so it is not seen as overlapping', () => {
+  const others = [mk('a', 0, 4.333, 0)];
+  const e = 4.333;
+  assert.equal(settleAt(others, e - 0.004, 2, 0), e); // 4 ms inside the neighbour
+  assert.equal(settleAt(others, e + 0.009, 2, 0), e);
+  assert.equal(settleAt(others, e + 0.2, 2, 0), null);
+  assert.equal(settleAt(others, e - 0.004, 2, 1), null); // another lane: nothing to settle against
+  assert.equal(freeTrack(others, settleAt(others, e - 0.004, 2, 0)!, 2, 0), 0);
+});
+
+test('resolveOverlaps: the manipulated strip goes to the NEXT lane (not the next free one) and pushes what it lands on', () => {
+  // slowed clip `a` (0..4) now runs over `b` (3..5) on lane 0; lane 1 holds `c` (2..6) and lane 2 is empty
+  const cs = [mk('a', 0, 4, 0), mk('b', 3, 2, 0), mk('c', 2, 4, 1)];
+  const out = resolveOverlaps(cs, ['a']);
+  const by = (id: string) => out.find((x) => x.id === id)!;
+  assert.equal(by('a').track, 1); // next lane, even though lane 1 is busy
+  assert.equal(by('c').track, 2); // the one it landed on is pushed out in turn
+  assert.equal(by('b').track, 0);
+  // sound lanes push downwards
+  const au = [mk('p', 0, 4, -1), mk('q', 3, 2, -1)];
+  assert.equal(resolveOverlaps(au, ['p']).find((x) => x.id === 'p')!.track, -2);
+  // nothing overlaps: nothing moves
+  assert.deepEqual(resolveOverlaps([mk('a', 0, 2, 0), mk('b', 2, 2, 0)], ['a']).map((c) => c.track), [0, 0]);
+});
+
+test('laneRemovable / removeLane: only an empty lane between used ones, the far side moves toward 0', () => {
+  const mk = (id: string, track: number, at = 0) => ({ id, mediaId: 'm', start: 0, end: 4, speed: 1, view: { x: 0, y: 0, zoom: 1, rot: 0 }, volume: 1, keepPitch: true, at, track });
+  const clips = [mk('a', 0), mk('b', -2), mk('c', -5)];
+  assert.equal(laneRemovable(clips, -3), true);
+  assert.equal(laneRemovable(clips, -2), false);
+  assert.equal(laneRemovable(clips, -6), false);
+  assert.equal(laneRemovable(clips, 1), false);
+  const r = removeLane(clips, -3);
+  assert.deepEqual(r.map((c) => c.track), [0, -2, -4]);
+  const up = removeLane([mk('a', 0), mk('b', 3)], 1);
+  assert.deepEqual(up.map((c) => c.track), [0, 2]);
+});
+
+test('optimizeLanes: fewest lanes, same order of every overlapping pair', () => {
+  const mk = (id: string, track: number, at: number, end = 2) => ({ id, mediaId: 'm', start: 0, end, speed: 1, view: { x: 0, y: 0, zoom: 1, rot: 0 }, volume: 1, keepPitch: true, at, track });
+  // a late strip high up with nothing under it drops next to the early ones; a strip over another keeps its place above it
+  const r = optimizeLanes([mk('base', 0, 0, 10), mk('early', 1, 0), mk('late', 5, 6), mk('over', 9, 1)]);
+  const t = (id: string) => r.clips.find((c) => c.id === id)!.track;
+  assert.ok(t('over') > t('base') && t('over') > t('early'));
+  assert.ok(t('late') > t('base'));
+  assert.equal(new Set(r.clips.map((c) => c.track)).size, 3); // base, early/late share, over
+  // overlapping strips never share a lane
+  for (const a of r.clips) for (const b of r.clips) if (a.id !== b.id && a.track === b.track) assert.ok(a.at >= clipEnd(b) - 1e-6 || b.at >= clipEnd(a) - 1e-6);
+  // strips spread over many lanes but never overlapping collapse into one lane
+  const flat = optimizeLanes([mk('a', 3, 0), mk('b', -4, 3), mk('c', 7, 6)]);
+  assert.equal(new Set(flat.clips.map((c) => c.track)).size, 1);
+  // three stacked strips over time keep their depth
+  const stack = optimizeLanes([mk('a', 1, 0), mk('b', 2, 0), mk('c', 3, 0)]);
+  assert.deepEqual(stack.clips.map((c) => c.track), [1, 2, 3]);
+});
+
+test('removeGap: a gap that starts at an odd time never bounces the next strip to another lane', () => {
+  for (const end of [4.123, 3.337, 7.0049, 1.999, 5.5551]) {
+    const cs = [mk('a', 0, end, 0), mk('b', end + 2.4417, 3, 0)];
+    const out = removeGap(cs, { track: 0, from: end, to: end + 2.4417 });
+    assert.equal(out.find((c) => c.id === 'b')!.track, 0, `end ${end}`);
+    assert.ok(Math.abs(out.find((c) => c.id === 'b')!.at - end) < 1e-3);
+  }
+});
+
+test('tapCell: the 3x3 grid picks the whole canvas, a half or a quarter', async () => {
+  const { tapCell } = await import('../src/geometry.ts');
+  const W = 900;
+  const H = 600;
+  assert.deepEqual(tapCell(450, 300, W, H), { x: 0, y: 0, w: W, h: H }); // 5
+  assert.deepEqual(tapCell(800, 300, W, H), { x: 450, y: 0, w: 450, h: H }); // 6: right half
+  assert.deepEqual(tapCell(100, 300, W, H), { x: 0, y: 0, w: 450, h: H }); // 4: left half
+  assert.deepEqual(tapCell(450, 20, W, H), { x: 0, y: 0, w: W, h: 300 }); // 2: top half
+  assert.deepEqual(tapCell(450, 590, W, H), { x: 0, y: 300, w: W, h: 300 }); // 8: bottom half
+  assert.deepEqual(tapCell(20, 590, W, H), { x: 0, y: 300, w: 450, h: 300 }); // 7: bottom left quarter
+  assert.deepEqual(tapCell(880, 10, W, H), { x: 450, y: 0, w: 450, h: 300 }); // 3: top right quarter
+});
+
+test('fitSegment: fit, then fill and crop to exactly the rectangle, then back to fit', async () => {
+  const { fitSegment, shownBox } = await import('../src/geometry.ts');
+  const W = 1000;
+  const H = 600;
+  const T = { x: 500, y: 0, w: 500, h: 300 };
+  const v = { x: 0.3, y: -0.2, zoom: 0.4, rot: 0 };
+  const a = fitSegment(v, undefined, undefined, 400, 400, W, H, T);
+  assert.equal(a.mode, 'Fit');
+  const ba = shownBox(a.view, a.crop, 400, 400, W, H);
+  assert.ok(Math.abs(ba.h - 300) < 0.5 && ba.x >= 500 - 0.5 && ba.x + ba.w <= 1000 + 0.5);
+  const b = fitSegment(a.view, a.crop, undefined, 400, 400, W, H, T);
+  assert.equal(b.mode, 'Fill');
+  const bb = shownBox(b.view, b.crop, 400, 400, W, H);
+  assert.ok(Math.abs(bb.x - 500) < 0.5 && Math.abs(bb.y) < 0.5 && Math.abs(bb.w - 500) < 0.5 && Math.abs(bb.h - 300) < 0.5, JSON.stringify(bb));
+  const c = fitSegment(b.view, b.crop, undefined, 400, 400, W, H, T);
+  assert.equal(c.mode, 'Fit');
+  assert.equal(c.crop, undefined);
+});
+
+test('overwriteOverlaps: a dropped strip trims, splits or removes what is under it', () => {
+  let n = 0;
+  const id = () => `n${++n}`;
+  const under = mk('u', 0, 10, 0);
+  // covers the end
+  let out = overwriteOverlaps([under, mk('m', 8, 5, 0)], ['m'], id);
+  assert.equal(out.length, 2);
+  assert.ok(Math.abs(clipEnd(out.find((c) => c.id === 'u')!) - 8) < 1e-6);
+  // covers the start
+  out = overwriteOverlaps([under, mk('m', -2, 5, 0)], ['m'], id);
+  const u = out.find((c) => c.id === 'u')!;
+  assert.ok(Math.abs(u.at - 3) < 1e-6 && Math.abs(u.start - 3) < 1e-6 && Math.abs(clipEnd(u) - 10) < 1e-6);
+  // in the middle: cut in two
+  out = overwriteOverlaps([under, mk('m', 4, 2, 0)], ['m'], id);
+  assert.equal(out.length, 3);
+  const parts = out.filter((c) => c.id !== 'm').sort((a, b) => a.at - b.at);
+  assert.ok(Math.abs(clipEnd(parts[0]!) - 4) < 1e-6 && Math.abs(parts[1]!.at - 6) < 1e-6 && Math.abs(parts[1]!.start - 6) < 1e-6 && Math.abs(clipEnd(parts[1]!) - 10) < 1e-6);
+  // covered completely: gone; other lanes untouched
+  out = overwriteOverlaps([under, mk('o', 0, 10, 1), mk('m', -1, 12, 0)], ['m'], id);
+  assert.deepEqual(out.map((c) => c.id).sort(), ['m', 'o']);
+});
