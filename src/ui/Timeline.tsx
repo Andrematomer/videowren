@@ -133,9 +133,13 @@ export function Timeline() {
   }, []);
 
   // the position moved by itself (playing, selecting a clip, zooming): scroll the timeline under the line
+  // (not while the person is scrolling by hand: a snapped line is shown without moving the content under their finger)
+  const lastUser = useRef(0);
+  const settle = useRef(0);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    if (performance.now() - lastUser.current < 220) return;
     const want = playhead * pps;
     if (Math.abs(el.scrollLeft - want) > 1.5) el.scrollLeft = want;
   }, [playhead, pps, viewW, total]);
@@ -161,6 +165,17 @@ export function Timeline() {
     const g = getState();
     if ((g.selected >= 0 || g.gap) && g.multi.length === 0 && !st.current?.active && !trimRef.current && !boxRef.current?.active) deselect();
     set({ playhead: at });
+    // the content keeps following the finger, the line holds on the strip edge; when the hand stops, the content slides to the line
+    lastUser.current = performance.now();
+    clearTimeout(settle.current);
+    settle.current = window.setTimeout(() => {
+      lastUser.current = 0;
+      const e2 = scroller.current;
+      if (e2 && !pinching.current) {
+        const want = getState().playhead * live.current.pps;
+        if (Math.abs(e2.scrollLeft - want) > 1.5) e2.scrollLeft = want;
+      }
+    }, 240);
     if (!seekFrame.current)
       seekFrame.current = requestAnimationFrame(() => {
         seekFrame.current = 0;
@@ -179,7 +194,7 @@ export function Timeline() {
     const dist = (e: TouchEvent) => Math.hypot(e.touches[0]!.clientX - e.touches[1]!.clientX, e.touches[0]!.clientY - e.touches[1]!.clientY);
     const start = (e: TouchEvent) => {
       trail = [];
-      lock = e.touches.length === 1 && !(e.target as Element).closest('.strip-clip') ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY, pps0: live.current.pps, axis: null } : null;
+      lock = e.touches.length === 1 && !(e.target as Element).closest('.trim-h') ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY, pps0: live.current.pps, axis: null } : null;
       if (e.touches.length === 2) {
         lock = null;
         pinch = { d0: dist(e), pps0: live.current.pps };
@@ -194,7 +209,7 @@ export function Timeline() {
       if (pinch && e.touches.length === 2) {
         e.preventDefault();
         setPps(Math.max(MIN_PPS, Math.min(MAX_PPS, (pinch.pps0 * dist(e)) / pinch.d0)));
-      } else if (st.current?.active || trimRef.current || boxRef.current?.active) e.preventDefault();
+      } else if (st.current?.active || slipRef.current?.active || trimRef.current || boxRef.current?.active) e.preventDefault();
       else if (lock && e.touches.length === 1 && (lock.axis === 'y' || (lock.axis === null && Math.hypot(e.touches[0]!.clientX - lock.x, e.touches[0]!.clientY - lock.y) > 10))) {
         const dx = e.touches[0]!.clientX - lock.x;
         const dy = e.touches[0]!.clientY - lock.y;
@@ -202,8 +217,14 @@ export function Timeline() {
         if (lock.axis === 'y') {
           trail = []; // the sideways trail from before the zoom is about another zoom level
           e.preventDefault();
+          // a strip that was only touched (not picked up, not slid) lets go: this drag is a zoom
+          if (st.current && !st.current.active) (clearTimeout(st.current.timer), (st.current = null));
+          if (slipRef.current && !slipRef.current.active) slipRef.current = null;
+          const wasZooming = pinching.current;
           pinching.current = true; // the scroll that follows a zoom is not a seek
           el.style.overflowX = 'hidden'; // sideways is off for the rest of this drag
+          // switching the overflow can throw the scroll position back to 0 (WebKit): put it where the line is, right away
+          if (!wasZooming) el.scrollLeft = getState().playhead * live.current.pps;
           setPps(Math.max(MIN_PPS, Math.min(MAX_PPS, lock.pps0 * Math.exp(-dy / 140))));
         }
       } else if (e.touches.length === 1) {
@@ -237,10 +258,11 @@ export function Timeline() {
       trail = [];
     };
     // a mouse has no touch scrolling: drag sideways to seek, up or down to zoom (same rule as a finger)
-    let pm: { id: number; x: number; left: number; y: number; pps0: number; axis: 'x' | 'y' | null } | null = null;
+    let pm: { id: number; x: number; left: number; y: number; pps0: number; axis: 'x' | 'y' | null; onStrip: boolean } | null = null;
     const mDown = (e: PointerEvent) => {
-      if (e.pointerType !== 'mouse' || e.button !== 0 || (e.target as Element).closest('.strip-clip, .trim-h, button')) return;
-      pm = { id: e.pointerId, x: e.clientX, left: el.scrollLeft, y: e.clientY, pps0: live.current.pps, axis: null };
+      const onStrip = !!(e.target as Element).closest('.strip-clip');
+      if (e.pointerType !== 'mouse' || e.button !== 0 || (e.target as Element).closest('.trim-h') || (!onStrip && (e.target as Element).closest('button'))) return;
+      pm = { id: e.pointerId, x: e.clientX, left: el.scrollLeft, y: e.clientY, pps0: live.current.pps, axis: null, onStrip };
     };
     const mMove = (e: PointerEvent) => {
       if (!pm || pm.id !== e.pointerId) return;
@@ -251,6 +273,12 @@ export function Timeline() {
       if (pm.axis === null) {
         if (Math.hypot(dx, dy) < 8) return;
         pm.axis = Math.abs(dy) > Math.abs(dx) * 1.2 ? 'y' : 'x';
+        // on a strip a sideways mouse drag belongs to the strip (slide, move); only the vertical drag is the zoom
+        if (pm.onStrip && pm.axis === 'x') return void (pm = null);
+        if (pm.axis === 'y') {
+          if (st.current && !st.current.active) (clearTimeout(st.current.timer), (st.current = null));
+          if (slipRef.current && !slipRef.current.active) slipRef.current = null;
+        }
         if (boxRef.current) (clearTimeout(boxRef.current.timer), (boxRef.current = null));
         swallow.current = true;
         try {

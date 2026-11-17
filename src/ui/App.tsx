@@ -114,7 +114,7 @@ export function App() {
     const tap = (e: MouseEvent) => {
       const el = e.target as Element | null;
       if (!el || !el.closest) return;
-      if (el.closest('button, a, input, label, textarea, select, .strip-clip, .frame, .tl-scroll, .tl-bar, .tl-gap, .drawer, .tabbar, .sheet, .toast, .add-menu')) return;
+      if (el.closest('button, a, input, label, textarea, select, .strip-clip, .frame, .tl-scroll, .tl-bar, .tl-gap, .drawer, .tabbar, .toast, .add-menu')) return;
       deselect();
     };
     // a picked gap is let go by the next touch anywhere (except on the gap itself, which holds the trash can)
@@ -130,7 +130,7 @@ export function App() {
       const st = getState();
       if (st.sheet === 'none' && !st.drawer) return;
       const el = e.target as Element | null;
-      if (el?.closest?.('.sheet, .drawer, .tabbar, .toast, .lock-veil, header.top')) return;
+      if (el?.closest?.('.drawer, .tabbar, .toast, .lock-veil, header.top')) return;
       if (st.sheet !== 'none') {
         if (st.exporting) return; // an export that is running is never cancelled by a stray touch
         set({ sheet: 'none' });
@@ -198,20 +198,20 @@ export function App() {
             <Timeline />
             <TabBar />
             <Drawer />
+          <div class={leaving ? 'sheet-out' : 'sheet-host'}>
+          {shownSheet === 'export' && <ExportSheet onClose={() => set({ sheet: 'none' })} />}
+          {shownSheet === 'help' && <HelpSheet onClose={() => set({ sheet: 'none' })} />}
+          {shownSheet === 'canvas' && <CanvasSheet onClose={() => set({ sheet: 'none' })} />}
+          {shownSheet === 'timeline' && <TimelineSheet onClose={() => set({ sheet: 'none' })} />}
+          {shownSheet === 'settings' && <SettingsSheet onClose={() => set({ sheet: 'none' })} />}
+
+          </div>
           </main>
         )
       ) : (
         <Empty onEnter={() => setEntered(true)} />
       )}
 
-      <div class={leaving ? 'sheet-out' : 'sheet-host'}>
-      {shownSheet === 'export' && <ExportSheet onClose={() => set({ sheet: 'none' })} />}
-      {shownSheet === 'help' && <HelpSheet onClose={() => set({ sheet: 'none' })} />}
-      {shownSheet === 'canvas' && <CanvasSheet onClose={() => set({ sheet: 'none' })} />}
-      {shownSheet === 'timeline' && <TimelineSheet onClose={() => set({ sheet: 'none' })} />}
-      {shownSheet === 'settings' && <SettingsSheet onClose={() => set({ sheet: 'none' })} />}
-
-      </div>
 
       {dropping && <div class="drop-hint">Drop to add</div>}
 

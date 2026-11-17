@@ -526,46 +526,6 @@ input[type='range']::-moz-range-thumb {
 }
 
 /* sheets */
-.scrim {
-  position: fixed;
-  inset: 0;
-  background: rgba(5, 8, 10, 0.6);
-  display: flex;
-  align-items: flex-end;
-  z-index: 10;
-}
-.sheet {
-  width: 100%;
-  max-width: 560px;
-  margin: 0 auto;
-  max-height: 92dvh;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface);
-  border-radius: 22px 22px 0 0;
-  animation: rise 0.22s ease-out;
-}
-@keyframes rise {
-  from {
-    transform: translateY(24px);
-    opacity: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .sheet {
-    animation: none;
-  }
-}
-.sheet header {
-  display: flex;
-  align-items: center;
-  padding: 10px 8px 0 20px;
-}
-.sheet h2 {
-  flex: 1;
-  margin: 0;
-  font-size: 19px;
-}
 .sheet-body {
   overflow-y: auto;
   padding: 8px 20px calc(var(--safe-b) + 20px);
@@ -573,12 +533,12 @@ input[type='range']::-moz-range-thumb {
   flex-direction: column;
   gap: 16px;
 }
-.sheet section {
+.sheet-panel section {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.sheet h3 {
+.sheet-panel h3 {
   margin: 0;
   font-size: 15px;
   color: var(--muted);
@@ -1838,9 +1798,6 @@ label.cta {
 .drawer-scrim {
   bottom: var(--tabbar-h);
 }
-.scrim {
-  z-index: 40;
-}
 .tab {
   min-width: 0;
   padding: 6px 2px 4px;
@@ -1872,7 +1829,7 @@ label.cta {
 }
 
 /* sheets: choices are segmented buttons, explanations fold away */
-.sheet .chips {
+.sheet-panel .chips {
   display: flex;
   flex-wrap: wrap;
   gap: 3px;
@@ -1880,18 +1837,18 @@ label.cta {
   background: var(--raised);
   border-radius: 14px;
 }
-.sheet .chips .chip {
+.sheet-panel .chips .chip {
   flex: 1 1 0;
   min-width: max-content;
   border-radius: 11px;
   background: transparent;
   padding: 0 12px;
 }
-.sheet .chips .chip.on {
+.sheet-panel .chips .chip.on {
   background: var(--accent);
   color: var(--accent-ink);
 }
-.sheet .chips .swatch {
+.sheet-panel .chips .swatch {
   flex: none;
 }
 .more-btn {
@@ -1906,24 +1863,6 @@ label.cta {
 .sheet-host,
 .sheet-out {
   display: contents;
-}
-.sheet-out .scrim {
-  animation: scrim-out 0.19s ease-in forwards;
-  pointer-events: none;
-}
-.sheet-out .sheet {
-  animation: sheet-out 0.19s ease-in forwards;
-}
-@keyframes scrim-out {
-  to {
-    opacity: 0;
-  }
-}
-@keyframes sheet-out {
-  to {
-    transform: translateY(32px);
-    opacity: 0;
-  }
 }
 .fold {
   border-bottom: 1px solid var(--line);
@@ -2266,7 +2205,7 @@ label.cta {
 .sheet-body {
   gap: 24px;
 }
-.sheet section {
+.sheet-panel section {
   gap: 6px;
 }
 .fold-title {
@@ -2484,18 +2423,6 @@ label.cta {
     animation: none;
   }
 }
-/* the project tools open over the timeline like every other tool: the tab bar stays below them */
-.scrim {
-  bottom: var(--tabbar-h);
-  background: rgba(5, 8, 10, 0.4);
-}
-.sheet {
-  max-height: calc(100dvh - var(--tabbar-h) - var(--safe-t) - 16px);
-  border-radius: 16px 16px 0 0;
-}
-.sheet-body {
-  padding-bottom: 16px;
-}
 
 /* full preview on a phone locked to portrait but held on its side: the screen is turned in code */
 .app.turned-cw,
@@ -2688,15 +2615,6 @@ button.tl-time {
   background: transparent;
 }
 
-/* sheets and drawers sit over the app without blocking it: touches outside them reach what is underneath */
-.scrim {
-  background: none;
-  pointer-events: none;
-}
-.scrim .sheet {
-  pointer-events: auto;
-  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.35);
-}
 .drawer-scrim {
   display: none;
 }
@@ -2728,11 +2646,11 @@ button.tl-time {
 
 /* segmented values: one yellow piece that slides to the picked value (see pill.ts) */
 .seg,
-.sheet .chips {
+.sheet-panel .chips {
   position: relative;
 }
 .seg::before,
-.sheet .chips::before {
+.sheet-panel .chips::before {
   content: '';
   position: absolute;
   left: 0;
@@ -2746,26 +2664,26 @@ button.tl-time {
   pointer-events: none;
 }
 .seg.pill::before,
-.sheet .chips.pill::before {
+.sheet-panel .chips.pill::before {
   opacity: 1;
 }
 .seg.pill-ready::before,
-.sheet .chips.pill-ready::before {
+.sheet-panel .chips.pill-ready::before {
   transition: transform 0.34s cubic-bezier(0.3, 1.35, 0.4, 1), width 0.34s cubic-bezier(0.3, 1.35, 0.4, 1), height 0.34s cubic-bezier(0.3, 1.35, 0.4, 1);
 }
 .seg > button,
-.sheet .chips > .chip {
+.sheet-panel .chips > .chip {
   position: relative;
   z-index: 1;
 }
 .seg.pill > button.on,
-.sheet .chips.pill > .chip.on {
+.sheet-panel .chips.pill > .chip.on {
   background: transparent;
   color: var(--accent-ink);
 }
 @media (prefers-reduced-motion: reduce) {
   .seg.pill-ready::before,
-  .sheet .chips.pill-ready::before {
+  .sheet-panel .chips.pill-ready::before {
     transition: none;
   }
 }
@@ -3092,13 +3010,10 @@ button.tl-time.tap {
   color: var(--muted);
   z-index: 3;
 }
-.sheet header,
 .drawer-head {
   padding-right: 44px;
 }
-.sheet {
-  position: relative;
-}
+
 
 /* the unsupported-browser page: modelled on a browser's dangerous-site warning */
 
@@ -3160,3 +3075,19 @@ button.tl-time.tap {
   color: #ff8a8a;
 }
 .danger-page p { color: #fff; }
+
+/* the panel for project tools is the clip drawer; only its content differs */
+.sheet-panel .sheet-body {
+  overflow: visible;
+  padding: 6px 4px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.sheet-out .drawer {
+  animation: drawer-down 0.17s ease-in forwards;
+  pointer-events: none;
+}
+.drawer {
+  position: absolute;
+}
