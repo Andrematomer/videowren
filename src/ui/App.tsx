@@ -15,7 +15,7 @@ import { TimelineSheet } from './TimelineSheet.tsx';
 import { SettingsSheet } from './SettingsSheet.tsx';
 import { saveFrame } from '../frame.ts';
 import { Timeline } from './Timeline.tsx';
-import { browserInfo, checkSupport, fakeCrash } from '../support.ts';
+import { browserInfo, checkSupport } from '../support.ts';
 
 const support = checkSupport();
 
@@ -25,7 +25,6 @@ export function App() {
   // installed, or after "Open in browser": the editor opens straight away, even with nothing in it yet
   const [entered, setEntered] = useState(isStandalone);
   const [tryAnyway, setTryAnyway] = useState(false);
-  if (tryAnyway && fakeCrash) throw new Error('Test crash (?fake=crash)');
   const sheet = useStore((s) => s.sheet);
   const focus = useStore((s) => s.focus);
   const locked = useStore((s) => s.locked);

@@ -16,7 +16,6 @@ class Boundary extends Component<{ children: ComponentChildren }, { error: Error
   render() {
     if (!this.state.error) return this.props.children;
     // every crash looks the same: the people who see it are on devices the app was not built for, and must not report it
-    const debug = new URLSearchParams(location.search).has('debug');
     console.error(this.state.error);
     return (
       <main class="fatal danger-page">
@@ -26,7 +25,6 @@ class Boundary extends Component<{ children: ComponentChildren }, { error: Error
         <h1>This device isn't supported</h1>
         <p>VideoWren is built for phones: an iPhone with iOS 16.4 or newer (Safari), or an Android phone with a recent Chrome. Anything else may crash, and this is what that looks like.</p>
         <p>This is not a bug to report. Open VideoWren on a supported phone and it will work.</p>
-        {debug && <pre>{String(this.state.error.stack || this.state.error.message || this.state.error).slice(0, 1500)}</pre>}
       </main>
     );
   }

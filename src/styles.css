@@ -3091,3 +3091,17 @@ button.tl-time.tap {
 .drawer {
   position: absolute;
 }
+
+/* seeking caught a strip edge: that edge lights up white on every strip that has it, and the line glows */
+.strip-clip.snap-l {
+  box-shadow: inset 4px 0 0 #fff, -3px 0 10px rgba(255, 255, 255, 0.55);
+}
+.strip-clip.snap-r {
+  box-shadow: inset -4px 0 0 #fff, 3px 0 10px rgba(255, 255, 255, 0.55);
+}
+.strip-clip.snap-l.snap-r {
+  box-shadow: inset 4px 0 0 #fff, inset -4px 0 0 #fff;
+}
+.tl-playhead.snapped {
+  box-shadow: 0 0 0 1px #fff, 0 0 12px 3px var(--accent);
+}

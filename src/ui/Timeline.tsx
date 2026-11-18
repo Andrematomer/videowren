@@ -139,6 +139,7 @@ export function Timeline() {
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
+    if (snapRef.current != null && Math.abs(playhead - snapRef.current) > 1e-6) (snapRef.current = null), setSnapAt(null); // moved by something else
     if (performance.now() - lastUser.current < 220) return;
     const want = playhead * pps;
     if (Math.abs(el.scrollLeft - want) > 1.5) el.scrollLeft = want;
@@ -148,6 +149,22 @@ export function Timeline() {
   const seekFrame = useRef(0);
   const pinching = useRef(false);
   const [scrollTop, setScrollTop] = useState(0);
+  const snapRef = useRef<number | null>(null);
+  const [snapAt, setSnapAt] = useState<number | null>(null);
+  const touching = useRef(false);
+  /** after the hand has let go for a moment, the content slides to where the line is (never while a finger is still down) */
+  const armSettle = () => {
+    clearTimeout(settle.current);
+    if (touching.current) return;
+    settle.current = window.setTimeout(() => {
+      lastUser.current = 0;
+      const e2 = scroller.current;
+      if (e2 && !pinching.current && !touching.current) {
+        const want = getState().playhead * live.current.pps;
+        if (Math.abs(e2.scrollLeft - want) > 1.5) e2.scrollLeft = want;
+      }
+    }, 160);
+  };
   const onScroll = () => {
     const el = scroller.current;
     if (!el || pinching.current) return;
@@ -155,27 +172,36 @@ export function Timeline() {
     const t = Math.max(0, Math.min(totalOf(live.current.clips), el.scrollLeft / live.current.pps));
     if (Math.abs(t - live.current.playhead) * live.current.pps < 1.5) return;
     if (getState().playing) engine.pause();
-    // the line is pulled to the start and end of every strip, like a strip being moved (a few pixels of magnet)
+    // the line is pulled to the start and end of every strip, like a strip being moved. Once caught it holds until the
+    // finger is well past the edge (12 px), so jitter at the border of the magnet cannot flick it in and out
     let at = t;
-    let best = 7 / live.current.pps;
-    for (const c of live.current.clips) {
-      for (const e of [c.at, c.at + clipDuration(c)]) if (Math.abs(e - t) < best) (best = Math.abs(e - t)), (at = e);
+    const px = live.current.pps;
+    const held = snapRef.current;
+    if (held != null && Math.abs(held - t) * px < 12) at = held;
+    else {
+      let best = 7 / px;
+      let hit: number | null = null;
+      for (const c of live.current.clips) {
+        for (const e of [c.at, c.at + clipDuration(c)]) if (Math.abs(e - t) < best) (best = Math.abs(e - t)), (hit = e);
+      }
+      if (hit != null) {
+        at = hit;
+        try {
+          navigator.vibrate?.(6);
+        } catch {
+          /* not supported */
+        }
+      }
+      snapRef.current = hit;
+      setSnapAt(hit);
     }
     // moving around the timeline by hand leaves nothing selected (a strip being dragged or trimmed stays)
     const g = getState();
     if ((g.selected >= 0 || g.gap) && g.multi.length === 0 && !st.current?.active && !trimRef.current && !boxRef.current?.active) deselect();
     set({ playhead: at });
-    // the content keeps following the finger, the line holds on the strip edge; when the hand stops, the content slides to the line
+    // the content keeps following the finger, the line holds on the strip edge; when the hand lets go, the content slides to the line
     lastUser.current = performance.now();
-    clearTimeout(settle.current);
-    settle.current = window.setTimeout(() => {
-      lastUser.current = 0;
-      const e2 = scroller.current;
-      if (e2 && !pinching.current) {
-        const want = getState().playhead * live.current.pps;
-        if (Math.abs(e2.scrollLeft - want) > 1.5) e2.scrollLeft = want;
-      }
-    }, 240);
+    armSettle();
     if (!seekFrame.current)
       seekFrame.current = requestAnimationFrame(() => {
         seekFrame.current = 0;
@@ -193,6 +219,8 @@ export function Timeline() {
     let trail: { t: number; x: number; left: number }[] = [];
     const dist = (e: TouchEvent) => Math.hypot(e.touches[0]!.clientX - e.touches[1]!.clientX, e.touches[0]!.clientY - e.touches[1]!.clientY);
     const start = (e: TouchEvent) => {
+      touching.current = true;
+      clearTimeout(settle.current);
       trail = [];
       lock = e.touches.length === 1 && !(e.target as Element).closest('.trim-h') ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY, pps0: live.current.pps, axis: null } : null;
       if (e.touches.length === 2) {
@@ -234,6 +262,10 @@ export function Timeline() {
       }
     };
     const end = (e: TouchEvent) => {
+      if (e.touches.length === 0) {
+        touching.current = false;
+        armSettle();
+      }
       if (lock?.axis === 'y') trail = [];
       if (lock?.axis === 'y' && e.touches.length === 0)
         requestAnimationFrame(() => {
@@ -262,6 +294,8 @@ export function Timeline() {
     const mDown = (e: PointerEvent) => {
       const onStrip = !!(e.target as Element).closest('.strip-clip');
       if (e.pointerType !== 'mouse' || e.button !== 0 || (e.target as Element).closest('.trim-h') || (!onStrip && (e.target as Element).closest('button'))) return;
+      touching.current = true;
+      clearTimeout(settle.current);
       pm = { id: e.pointerId, x: e.clientX, left: el.scrollLeft, y: e.clientY, pps0: live.current.pps, axis: null, onStrip };
     };
     const mMove = (e: PointerEvent) => {
@@ -294,6 +328,7 @@ export function Timeline() {
       }
     };
     const mUp = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse') (touching.current = false), armSettle();
       if (!pm || pm.id !== e.pointerId) return;
       const was = pm.axis;
       pm = null;
@@ -956,7 +991,7 @@ export function Timeline() {
                   key={c.id}
                   role="option"
                   aria-selected={on}
-                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''}`}
+                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''} ${snapAt != null && Math.abs(c.at - snapAt) < 1e-6 ? 'snap-l' : ''} ${snapAt != null && Math.abs(c.at + clipDuration(c) - snapAt) < 1e-6 ? 'snap-r' : ''}`}
                   style={{ left: `${padL + at * pps}px`, top: `${top}px`, width: `${w}px`, height: `${ROW}px`, ...(m?.solid ? { background: m.solid } : {}) }}
                   onPointerDown={down(i)}
                   onPointerMove={onMove}
@@ -1017,7 +1052,7 @@ export function Timeline() {
         >
           {showFrames ? Math.round(playhead * fps) : fmtTime(playhead, 2)}
         </button>
-        <div class="tl-playhead" style={{ left: `${padL}px` }} />
+        <div class={`tl-playhead ${snapAt != null ? 'snapped' : ''}`} style={{ left: `${padL}px` }} />
       </div>
     </div>
   );
