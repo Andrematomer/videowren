@@ -3092,13 +3092,21 @@ button.tl-time.tap {
   position: absolute;
 }
 
-/* seeking caught a strip edge: that edge is marked white on every strip that has it, on any layer */
-.strip-clip.snap-l {
-  box-shadow: inset 4px 0 0 #fff;
+/* seeking caught a strip edge: that edge is marked solid white on every strip that has it, on any layer (drawn above the thumbnails) */
+.strip-clip.snap-l::before,
+.strip-clip.snap-r::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #fff;
+  z-index: 6;
+  pointer-events: none;
 }
-.strip-clip.snap-r {
-  box-shadow: inset -4px 0 0 #fff;
+.strip-clip.snap-l::before {
+  left: 0;
 }
-.strip-clip.snap-l.snap-r {
-  box-shadow: inset 4px 0 0 #fff, inset -4px 0 0 #fff;
+.strip-clip.snap-r::after {
+  right: 0;
 }

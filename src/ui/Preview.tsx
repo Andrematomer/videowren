@@ -5,7 +5,7 @@ import { type Rect, baseScale, clampView, fitSegment, shownBox, tapCell, clampZo
 import { resetTransform, deselect, getState, selectClip, set, setCrop, setMulti, setViews, toggleMulti, updateClip, useStore } from '../store.ts';
 import { localPoint } from '../turn.ts';
 import { activeAt, fmtTime, totalOf } from '../timeline.ts';
-import type { Crop, View } from '../types.ts';
+import type { Clip, Crop, View } from '../types.ts';
 import { Pause, Play } from './icons.tsx';
 import { Pie } from './Pie.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
@@ -279,6 +279,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       groupLive.current = null;
       engine.liveMany = null;
       setViews(out);
+      pingGroup();
       engine.draw();
       live.current = null; // the group moved the strips: the single-strip view that was remembered at touch-down must not be written back
     }
@@ -424,7 +425,10 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     if (i !== st0.selected) return selectClip(i, { keepPlayhead: true });
     // tapping the picked picture again swaps select mode and edit mode (the timeline strip follows)
     // the swap waits for the end of the double-tap window, so a double tap never flashes the other mode
-    const edit = !st0.handles;
+    swapMode();
+  };
+  const swapMode = () => {
+    const edit = !getState().handles;
     clearTimeout(modeSay.current);
     modeSay.current = window.setTimeout(() => {
       set({ handles: edit });
@@ -631,6 +635,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     });
     groupLive.current = out;
     engine.liveMany = new Map(out);
+    pingGroup();
     if (!frame.current) frame.current = requestAnimationFrame(paint);
   };
   const step = (b: NonNullable<typeof base.current>, c: NonNullable<ReturnType<typeof current>>) => {
@@ -933,8 +938,10 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   };
   useEffect(() => {
     handleDouble = () => doubleTap(0, 0);
+    handleSingle = () => getState().multi.length === 0 && swapMode();
     return () => {
       handleDouble = null;
+      handleSingle = null;
     };
   });
   const wheel = (e: WheelEvent) => {
@@ -1007,13 +1014,17 @@ function showLines(frame: HTMLElement | null | undefined, x: number | null, y: n
 
 /** a double tap on a transform handle does what a double tap on the picture does (the picture may be too small to hit) */
 let handleDouble: (() => void) | null = null;
+let handleSingle: (() => void) | null = null;
 let lastHandleTap = 0;
 function handleTapped(): void {
   const now = performance.now();
   if (now - lastHandleTap < 400) {
     lastHandleTap = 0;
     handleDouble?.();
-  } else lastHandleTap = now;
+  } else {
+    lastHandleTap = now;
+    handleSingle?.();
+  }
 }
 
 type Handle = 'tl' | 'tr' | 'br' | 'bl' | 'l' | 't' | 'r' | 'b' | 'rot';
@@ -1425,12 +1436,23 @@ function quadOf(c: Clip1, m: Media1, W: number, H: number): Pt[] {
  * One box around the picked strips that are under the yellow line. Corners scale and the round handle turns
  * them all together, like a group; strips that are picked but not on screen at this moment are left alone.
  */
+/** tells the group box that the strips are moving (or stopped) so it follows them */
+function pingGroup(): void {
+  window.dispatchEvent(new Event('pc-group-live'));
+}
+
 function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const multi = useStore((s) => s.multi);
   const clips = useStore((s) => s.project.clips);
   const mediaMap = useStore((s) => s.project.media);
   const playhead = useStore((s) => s.playhead);
   const [drag, setDrag] = useState<{ f: number; dr: number; P: Pt } | null>(null);
+  const [, setPing] = useState(0);
+  useEffect(() => {
+    const on = () => setPing((n) => n + 1);
+    window.addEventListener('pc-group-live', on);
+    return () => window.removeEventListener('pc-group-live', on);
+  }, []);
   const st = useRef<{ id: number; h: Handle; p0: Pt; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; members: { i: number; v: View }[]; box: { l: number; t: number; r: number; b: number } } | null>(null);
 
   const members = multi.length === 0 ? [] : activeAt(clips, playhead).filter((i) => multi.includes(clips[i]!.id) && mediaMap[clips[i]!.mediaId] && mediaMap[clips[i]!.mediaId]!.kind !== 'audio');
@@ -1454,7 +1476,8 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   if (members.length === 0) return null;
 
   // the box around all of them, as it is at rest
-  const pts = members.flatMap((i) => quadOf(clips[i]!, mediaMap[clips[i]!.mediaId]!, W, H));
+  const liveOf = (i: number): Clip => (engine.liveMany?.has(i) ? { ...clips[i]!, view: engine.liveMany.get(i)! } : clips[i]!);
+  const pts = members.flatMap((i) => quadOf(liveOf(i), mediaMap[clips[i]!.mediaId]!, W, H));
   const rest = { l: Math.min(...pts.map((p) => p.x)), t: Math.min(...pts.map((p) => p.y)), r: Math.max(...pts.map((p) => p.x)), b: Math.max(...pts.map((p) => p.y)) };
   const box = st.current?.box ?? rest;
   const base: Record<Handle, Pt> = {
@@ -1593,7 +1616,7 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     <>
       <svg class="tbox glow" width={W} height={H} aria-hidden="true">
         {members.map((i) => (
-          <polygon key={clips[i]!.id} points={quadOf(clips[i]!, mediaMap[clips[i]!.mediaId]!, W, H).map((p) => `${p.x},${p.y}`).join(' ')} />
+          <polygon key={clips[i]!.id} points={quadOf(liveOf(i), mediaMap[clips[i]!.mediaId]!, W, H).map((p) => `${p.x},${p.y}`).join(' ')} />
         ))}
       </svg>
       <svg class="tbox group" width={W} height={H} aria-hidden="true">
