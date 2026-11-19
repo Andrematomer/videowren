@@ -8,6 +8,7 @@ import { activeAt, fmtTime, totalOf } from '../timeline.ts';
 import type { Crop, View } from '../types.ts';
 import { Pause, Play } from './icons.tsx';
 import { Pie } from './Pie.tsx';
+import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 
 export function Preview() {
   const project = useStore((s) => s.project);
@@ -176,7 +177,11 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     if (text) return say(text);
     hide();
   };
+  const regionTick = useRef(snapTicker()).current;
+  const gTick = useRef(snapTicker()).current;
+  const lTick = useRef(snapTicker()).current;
   const guides = (s: ReturnType<typeof snapView> | null) => {
+    gTick(s && (s.x || s.y || s.edges.l || s.edges.r || s.edges.t || s.edges.b || s.zoom || s.rot !== null) ? `${!!s.x}${!!s.y}${s.edges.l}${s.edges.r}${s.edges.t}${s.edges.b}${s.zoom}${s.rot}` : null);
     guideV.current?.classList.toggle('on', !!s?.x);
     guideH.current?.classList.toggle('on', !!s?.y);
     for (const k of ['l', 'r', 't', 'b'] as const) edgeEls.current[k]?.classList.toggle('on', !!s?.edges[k]);
@@ -185,6 +190,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   };
   /** extra snap lines (the edges and middles of other pictures), in canvas pixels from the top left */
   const lines = (x: number | null, y: number | null) => {
+    lTick(x !== null || y !== null ? `${x},${y}` : null);
     const a = gx.current;
     const b = gy.current;
     if (a) (a.style.left = `${x ?? 0}px`), a.classList.toggle('on', x !== null);
@@ -250,6 +256,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       if (pts.current.size === 0 || fine.current) return;
       rebase();
       setFineLook(true);
+      haptic(14);
     }, HOLD_MS);
   };
   const paint = () => {
@@ -434,7 +441,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     if (ids.size === 0) return;
     setMulti([...ids]);
     try {
-      navigator.vibrate?.(12);
+      haptic(12);
     } catch {
       /* not supported */
     }
@@ -551,7 +558,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
           holdFrom.current = selBefore;
           paintBand();
           try {
-            navigator.vibrate?.(12);
+            haptic(12);
           } catch {
             /* not supported */
           }
@@ -672,6 +679,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       else if (Math.abs(ly - hiY) < SN) ly = hiY;
       lx = Math.min(hiX, Math.max(loX, lx));
       ly = Math.min(hiY, Math.max(loY, ly));
+      regionTick(!fine.current && (lx === loX || lx === hiX || ly === loY || ly === hiY) ? `${lx === loX ? 'l' : lx === hiX ? 'r' : ''}${ly === loY ? 't' : ly === hiY ? 'b' : ''}` : null);
       v = { ...v, x: (R.cx - (lx * Math.cos(a) - ly * Math.sin(a)) - W / 2) / W, y: (R.cy - (lx * Math.sin(a) + ly * Math.cos(a)) - H / 2) / H };
       const k: Crop = {
         l: Math.max(inset.l, (lx - R.hw + pw / 2) / pw),
@@ -746,7 +754,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
               const g = ghostEl.current;
               if (g) Object.assign(g.style, { display: 'block', left: `${T.x}px`, top: `${T.y}px`, width: `${T.w}px`, height: `${T.h}px` });
               try {
-                navigator.vibrate?.(10);
+                haptic(10);
               } catch {
                 /* not supported */
               }
@@ -893,6 +901,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     void cx;
     void cy;
     clearTimeout(modeSay.current);
+    hapticDouble();
     const members = groupMembers();
     const { boxW: W, boxH: H } = sizes.current;
     // the whole canvas: fit, fill, and the quarter turns (half and quarter placements come from dragging to a side or corner)
@@ -963,7 +972,10 @@ function inkCrop(clip: Clip0, media: { textBox?: Crop; solid?: string }): Crop |
 }
 
 /** the capsule on the preview while a handle is turned: the angle when it sits on a 45 degree step */
+const turnTick = snapTicker();
+const lineTick = snapTicker();
 function turnBadge(frame: HTMLElement | null | undefined, deg: number | null): void {
+  turnTick(deg);
   if (deg === null) hide();
   else say(fmtDeg(deg), 900);
 }
@@ -986,6 +998,7 @@ function boxTargets(W: number, H: number, skip: number[]): { xs: number[]; ys: n
 }
 /** shows snap lines on the preview (canvas pixels), or hides them */
 function showLines(frame: HTMLElement | null | undefined, x: number | null, y: number | null): void {
+  lineTick(x !== null || y !== null ? `${x},${y}` : null);
   const a = frame?.querySelector('.guide.gx') as HTMLElement | null;
   const b = frame?.querySelector('.guide.gy') as HTMLElement | null;
   if (a) (a.style.left = `${x ?? 0}px`), a.classList.toggle('on', x !== null);
@@ -1171,6 +1184,7 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
         d.fineEff = d.last;
         d.frame?.classList.add('fine');
         startFine();
+        haptic(14);
       }, HOLD_MS);
     };
     (d as { arm?: () => void }).arm = arm;
@@ -1498,6 +1512,7 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
         d.fineEff = d.last;
         d.frame?.classList.add('fine');
         startFine();
+        haptic(14);
       }, HOLD_MS);
     };
     (d as { arm?: () => void }).arm = arm;

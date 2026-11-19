@@ -1,4 +1,5 @@
 import { setPrefs, useStore } from '../store.ts';
+import { hapticSupported, haptic } from '../haptic.ts';
 import { Plain } from './Fold.tsx';
 import { Sheet } from './Sheet.tsx';
 import { Slider } from './Slider.tsx';
@@ -77,6 +78,17 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
         )}
       </Plain>
 
+      {hapticSupported && (
+        <Plain title="Vibration">
+          <div class="chips" role="group" aria-label="Vibration feedback">
+            {([[true, 'On'], [false, 'Off']] as const).map(([v, label]) => (
+              <button key={label} class={`chip ${prefs.haptics === v ? 'on' : ''}`} aria-pressed={prefs.haptics === v} onClick={() => { setPrefs({ haptics: v }); if (v) haptic(12); }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </Plain>
+      )}
     </Sheet>
   );
 }

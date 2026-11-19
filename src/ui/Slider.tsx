@@ -1,4 +1,5 @@
 import { useRef, useState } from 'preact/hooks';
+import { haptic } from '../haptic.ts';
 import { endFine, startFine } from '../hud.ts';
 
 const HOLD_MS = 900; // as long as on the preview: too easy to trigger by accident otherwise
@@ -61,7 +62,12 @@ export function Slider(p: SliderProps) {
     const r = track.current!.getBoundingClientRect();
     return (clientX - r.left) / r.width;
   };
-  const emit = (v: number) => v !== latest.current.value && latest.current.onChange(v);
+  const emit = (v: number) => {
+    if (v === latest.current.value) return;
+    // entering a snap value (not in fine mode) ticks once
+    if (!drag.current?.fine && latest.current.snaps?.includes(v)) haptic(6);
+    latest.current.onChange(v);
+  };
 
   const latest = useRef(p);
   latest.current = p;
@@ -76,6 +82,7 @@ export function Slider(p: SliderProps) {
       d.anchorF = toFrac(latest.current.value);
       setFine(true);
       startFine();
+      haptic(14);
     }, HOLD_MS);
   };
 

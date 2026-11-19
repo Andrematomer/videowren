@@ -10,6 +10,7 @@ import type { Clip, MediaInfo } from '../types.ts';
 import { PickLabel } from './Picker.tsx';
 import { Pie } from './Pie.tsx';
 import { Copy, Pause, Play, Plus, Redo, Split, Trash, Undo } from './icons.tsx';
+import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
 const HOLD_MS = 350; // hold a strip this long (without moving) to pick it up
@@ -150,6 +151,8 @@ export function Timeline() {
   const pinching = useRef(false);
   const [scrollTop, setScrollTop] = useState(0);
   const snapRef = useRef<number | null>(null);
+  const moveTick = useRef(snapTicker());
+  const trimTick = useRef(snapTicker());
   const [snapAt, setSnapAt] = useState<number | null>(null);
   const touching = useRef(false);
   /** after the hand has let go for a moment, the content slides to where the line is (never while a finger is still down) */
@@ -187,7 +190,7 @@ export function Timeline() {
       if (hit != null) {
         at = hit;
         try {
-          navigator.vibrate?.(6);
+          haptic(6);
         } catch {
           /* not supported */
         }
@@ -391,7 +394,7 @@ export function Timeline() {
       b.active = true;
       engine.pause();
       try {
-        navigator.vibrate?.(12);
+        haptic(12);
       } catch {
         /* not supported */
       }
@@ -520,6 +523,7 @@ export function Timeline() {
       // a new lane at the bottom comes into view by scrolling down to it
       if (zone === 'bottom') requestAnimationFrame(() => requestAnimationFrame(() => (el.scrollTop = el.scrollHeight)));
     }
+    moveTick.current(sn.guide);
     setMove({ index: s.i, at, track, top, guide: sn.guide });
     s.raf = requestAnimationFrame(frame);
   };
@@ -574,7 +578,7 @@ export function Timeline() {
         /* the pointer is gone */
       }
       try {
-        navigator.vibrate?.(12);
+        haptic(12);
       } catch {
         /* not supported */
       }
@@ -697,6 +701,7 @@ export function Timeline() {
     t.cur = solveTrim(t, e.clientX - t.x0);
     setTrim(t.cur);
     hold(`Trim ${fmtTime((t.cur.end - t.cur.start) / (live.current.clips[t.i]?.speed ?? 1), 2)}`);
+    trimTick.current(t.guide ?? null);
     setTrimGuide(t.guide ?? null);
     engine.scrubSource(t.i, t.side === 'left' ? t.cur.start : Math.max(t.cur.start, t.cur.end - 0.05), false);
   };
@@ -991,7 +996,7 @@ export function Timeline() {
                   key={c.id}
                   role="option"
                   aria-selected={on}
-                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''} ${snapAt != null && Math.abs(c.at - snapAt) < 1e-6 ? 'snap-l' : ''} ${snapAt != null && Math.abs(c.at + clipDuration(c) - snapAt) < 1e-6 ? 'snap-r' : ''}`}
+                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''} ${snapAt != null && Math.abs(c.at - snapAt) < 0.02 ? 'snap-l' : ''} ${snapAt != null && Math.abs(c.at + clipDuration(c) - snapAt) < 0.02 ? 'snap-r' : ''}`}
                   style={{ left: `${padL + at * pps}px`, top: `${top}px`, width: `${w}px`, height: `${ROW}px`, ...(m?.solid ? { background: m.solid } : {}) }}
                   onPointerDown={down(i)}
                   onPointerMove={onMove}
@@ -1052,7 +1057,7 @@ export function Timeline() {
         >
           {showFrames ? Math.round(playhead * fps) : fmtTime(playhead, 2)}
         </button>
-        <div class={`tl-playhead ${snapAt != null ? 'snapped' : ''}`} style={{ left: `${padL}px` }} />
+        <div class="tl-playhead" style={{ left: `${padL}px` }} />
       </div>
     </div>
   );

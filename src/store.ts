@@ -74,9 +74,11 @@ export interface AppPrefs {
   rowScale: number;
   /** strips are sized so every shown lane fits */
   rowAuto: boolean;
+  /** vibrate on holds, double taps and snaps (devices that support it) */
+  haptics: boolean;
 }
 
-export const DEFAULT_PREFS: AppPrefs = { imageSeconds: 5, previewLong: 240, awake: 'work', onEnd: 'pause', rowScale: 1, rowAuto: true };
+export const DEFAULT_PREFS: AppPrefs = { imageSeconds: 5, previewLong: 240, awake: 'work', onEnd: 'pause', rowScale: 1, rowAuto: true, haptics: true };
 
 function loadAppPrefs(): AppPrefs {
   try {
@@ -462,9 +464,30 @@ async function textMedia(text: string, st: TextStyle): Promise<MediaInfo> {
 /** A new text ("Text", in the last used style) at the position marker, on the first free lane from 0 up. */
 export type AddMode = 'end' | 'playhead' | 'replace';
 /** where and for how long a new text or color clip goes: after the last strip, as a layer at the yellow line, or in place of the selected strip */
-function placeNew(mode: AddMode): { at: number; track: number; dur: number; replace?: string } {
+/**
+ * Replacing a strip keeps everything of it that still applies to the new media: look, effects, opacity,
+ * volume, position on the canvas, crop, and the speed of a video or sound.
+ */
+function carried(old: Clip, oldMedia: MediaInfo | undefined, next: MediaInfo, base: Clip): Clip {
+  const out: Clip = { ...base, volume: old.volume, keepPitch: old.keepPitch };
+  const oldVisual = !!oldMedia && oldMedia.kind !== 'audio';
+  const nextVisual = next.kind !== 'audio';
+  if (oldVisual && nextVisual) {
+    if (old.opacity !== undefined) out.opacity = old.opacity;
+    if (old.grade) out.grade = old.grade;
+    if (old.fx) out.fx = old.fx;
+    const generated = next.text !== undefined || next.solid !== undefined;
+    out.view = generated ? { ...base.view, x: old.view.x, y: old.view.y, rot: old.view.rot } : { ...old.view };
+    const oldGenerated = oldMedia!.text !== undefined || oldMedia!.solid !== undefined;
+    if (old.crop && !generated && !oldGenerated) out.crop = old.crop;
+  }
+  if (next.kind !== 'image' && oldMedia && oldMedia.kind !== 'image') out.speed = old.speed;
+  return out;
+}
+
+function placeNew(mode: AddMode): { at: number; track: number; dur: number; replace?: string; old?: Clip } {
   const sel = mode === 'replace' && state.multi.length === 0 ? state.project.clips[state.selected] : undefined;
-  if (sel) return { at: sel.at, track: sel.track, dur: clipDuration(sel), replace: sel.id };
+  if (sel) return { at: sel.at, track: sel.track, dur: clipDuration(sel), replace: sel.id, old: sel };
   const dur = state.prefs.imageSeconds;
   if (mode === 'end') return { at: endOfTrack(state.project.clips, 0), track: 0, dur };
   return { at: state.playhead, track: freeTrack(state.project.clips, state.playhead, dur, 0), dur };
@@ -473,8 +496,9 @@ function placeNew(mode: AddMode): { at: number; track: number; dur: number; repl
 export async function addTextClip(mode: AddMode = 'playhead', text = 'Text'): Promise<void> {
   const st = loadTextStyle();
   const info = await textMedia(text, st);
-  const { at, track, dur, replace } = placeNew(mode);
-  const clip: Clip = { id: newId(), mediaId: info.id, start: 0, end: dur, speed: 1, view: { ...IDENTITY_VIEW, zoom: 0.8 }, volume: 1, keepPitch: true, at, track };
+  const { at, track, dur, replace, old } = placeNew(mode);
+  let clip: Clip = { id: newId(), mediaId: info.id, start: 0, end: dur, speed: 1, view: { ...IDENTITY_VIEW, zoom: 0.8 }, volume: 1, keepPitch: true, at, track };
+  if (old) clip = carried(old, state.project.media[old.mediaId], info, clip);
   const index = state.project.clips.length - (replace ? 1 : 0);
   edit((p) => ({ ...p, media: { ...p.media, [info.id]: info }, clips: [...p.clips.filter((c) => c.id !== replace), clip] }));
   selectClip(index);
@@ -521,9 +545,10 @@ export async function addSolid(color: string, mode: AddMode = 'playhead'): Promi
   registerMedia(id, r.blob, null, { name: 'Color', bitmap: r.bitmap });
   void saveMedia(id, { blob: r.blob, name: 'Color', thumb: null });
   const info: MediaInfo = { id, name: 'Color', duration: IMAGE_MAX_SECONDS, width: r.width, height: r.height, hasAudio: false, kind: 'image', solid: color };
-  const { at, track, dur, replace } = placeNew(mode);
+  const { at, track, dur, replace, old } = placeNew(mode);
   const out = outputSize(state.project);
-  const clip: Clip = { id: newId(), mediaId: id, start: 0, end: dur, speed: 1, view: { ...IDENTITY_VIEW, zoom: fillZoom(r.width, r.height, 0, out.w, out.h) }, volume: 1, keepPitch: true, at, track };
+  let clip: Clip = { id: newId(), mediaId: id, start: 0, end: dur, speed: 1, view: { ...IDENTITY_VIEW, zoom: fillZoom(r.width, r.height, 0, out.w, out.h) }, volume: 1, keepPitch: true, at, track };
+  if (old) clip = carried(old, state.project.media[old.mediaId], info, clip);
   const index = state.project.clips.length - (replace ? 1 : 0);
   edit((p) => ({ ...p, media: { ...p.media, [id]: info }, clips: [...p.clips.filter((c) => c.id !== replace), clip] }));
   selectClip(index);
@@ -644,7 +669,8 @@ export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'rep
         // new clips go to the end of their lane, one after another
         at = endOfTrack([...state.project.clips, ...added], track);
       }
-      added.push({ id: newId(), mediaId: id, start: 0, end: replaced && !audio ? Math.min(end, replaced.speed ? (replaced.end - replaced.start) / replaced.speed : end) : end, speed: 1, view: { ...IDENTITY_VIEW }, volume: 1, keepPitch: true, at, track });
+      const fresh: Clip = { id: newId(), mediaId: id, start: 0, end: replaced && !audio ? Math.min(end, image && replaced.speed ? (replaced.end - replaced.start) / replaced.speed : replaced.end - replaced.start) : end, speed: 1, view: { ...IDENTITY_VIEW }, volume: 1, keepPitch: true, at, track };
+      added.push(replaced ? carried(replaced, state.project.media[replaced.mediaId], info, fresh) : fresh);
       void saveMedia(id, { blob: file, name: file.name, thumb });
       queueProxy(id, info, state.prefs.previewLong);
     } catch (e) {

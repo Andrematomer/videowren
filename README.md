@@ -4,19 +4,11 @@
 
 **A mobile video editor that fits in your pocket.** Small, offline, free, and no trackers or analytics.
 
-> ## ⚠️ Work in progress. Not ready to use yet.
->
-> This is an early test version, built to try out the idea. It is **not meant for real use**.
-> It may fail to start on some phones, exports may fail or come out without sound, the look and the
-> settings will change, and a saved project can be lost between versions.
-> Please don't rely on it for anything important, and keep the original videos.
-
 Ever tried to send a video to Discord and been greeted by the **5 MB limit**? Or needed to cut ten
 seconds out of a clip and ended up downloading a 2 GB video editor you will never open again? Or
 wanted to post a long video as Stories, only to find it cut off at the wrong second?
 
-VideoWren (formerly Pocket Cut) started as exactly that: a tiny quick-edit tool. This branch drifted far past it. It is now a
-**multi-lane non-linear editor (NLE)** that fits on a phone and weighs next to nothing: stack videos,
+VideoWren is the answer: a **multi-lane non-linear editor (NLE)** that fits on a phone and weighs next to nothing: stack videos,
 pictures, text and sound on layers, place them freely in time, and export as one file or as several files of a
 fixed length (for example 60-second parts for Instagram Stories).
 
@@ -27,13 +19,11 @@ Runs entirely in the browser. No account, no upload, no watermark, no ads, and n
 It works as a normal web page. Installing it as an app is optional: that only adds offline use and
 full-screen mode.
 
-> **Experimental NLE build (branch `nla`).** This branch replaces the one-after-another clip list with a multi-lane timeline. It is published next to the normal app at `/nla/` and keeps its own saved data. The main app stays the simple clip-sequence editor.
-
 ## Install on your phone (optional)
 
 - **Android (Chrome):** the Install button on the welcome screen, or menu → Install app.
 - **Computer (Chrome / Edge):** the install icon in the address bar, or the Install button on the welcome screen.
-- **iPhone / iPad (Safari):** Share → Add to Home Screen. If you use it often, do this rather than keeping a
+- **iPhone / iPad (Safari, Edge and other browsers that offer it):** Share → Add to Home Screen. If you use it often, do this rather than keeping a
   normal tab: Safari deletes the stored data of websites you haven't opened for 7 days, but as far as is
   known not that of Home Screen apps.
 
@@ -43,11 +33,11 @@ After the first visit it works with no connection.
 
 | | |
 |---|---|
-| Timeline | Lanes of strips; the yellow line is fixed and the timeline scrolls under it. Pinch to zoom. Higher lanes draw on top. Hold a strip to lift it, then drag it in time or to another lane; it snaps to its neighbors. Drag the handles of the selected strip to trim; hold still for fine control. |
+| Timeline | Lanes of strips; the yellow line is fixed and the timeline scrolls under it. Pinch to zoom. Higher lanes draw on top. Hold a strip to lift it, then drag it in time or to another lane; it snaps to the edges of its neighbors on any layer. Drag the handles of the selected strip to trim; hold still for fine control. In edit mode, dragging a video or sound strip slips its content inside the strip. Drag up or down on the timeline to zoom, sideways to seek; the line catches strip edges and marks every strip that has that edge. |
 | Gaps | Tap empty space between strips to pick the gap (dark red), tap its trash can to remove it: everything after it moves earlier, and anything that would collide hops to the next free lane. |
-| Tabs | With a clip selected: its tabs (Speed, Sound, Look, Text...) raise a drawer over the timeline. With nothing selected (tap an empty lane, a gap or the space around the canvas): Help, Ratio, Settings, Export. |
-| Middle bar | Play, Add (Media after the last strip, Media as layer at the yellow line, Text, Color), Delete, Undo, Redo, Split, Duplicate (the copy sits at the same time, one layer out). The whole area after the dashed line is the pane divider: drag or flick it to trade height between preview and timeline. |
-| Empty lanes | Tap an empty lane that lies between used lanes to pick it (dark red), tap it again to take it out: the strips on its far side (further from lane 0) move one lane closer. Settings has Optimize timeline, which moves every strip as close to lane 0 as it can go without changing what covers what. |
+| Tabs | With a clip selected: its tabs (Speed, Sound, Look, Text...) raise a drawer over the timeline. With nothing selected (tap an empty lane, a gap or the space around the canvas): Help, Canvas, Timeline, Settings, Export. Every panel has a × to close it. |
+| Middle bar | Play, Add (first where it goes: after the last strip, on a new layer at the yellow line, or in place of the selected strip; then Media, Text, Color or Clipboard. Replacing keeps the strip's look, effects, opacity, volume, position, crop and speed wherever they still apply), Delete, Undo, Redo, Split, Duplicate (the copy sits at the same time, one layer out). The whole area after the dashed line is the pane divider: drag or flick it to trade height between preview and timeline. |
+| Empty lanes | Tap an empty lane that lies between used lanes to pick it (dark red), tap it again to take it out: the strips on its far side (further from lane 0) move one lane closer. The Timeline panel has Simplify timeline, which moves every strip as close to lane 0 as it can go without changing what covers what. |
 | Split | The Split button cuts the selected strip at the yellow line, or every strip under the line when nothing is selected. |
 | Several strips | Hold on empty space in the timeline (a gap too) until the box appears, then drag it over strips to pick them. Tap the time badge to pick every strip under the yellow line. Tap strips to add or remove them, or hold and box again to add more. A box around the picked strips on screen scales and turns them as a group, and so do one or two fingers on the preview. Tabs shared by all of them stay; sound, speed and look changes reach all, and dragging one moves all. |
 | Full preview | Drag or flick the ⇕ area at the end of the middle bar down until less than one lane shows and release: the preview fills the screen with Delete, Undo, Redo, Duplicate and Exit. Dragging it up shrinks the preview to nothing. |
@@ -57,21 +47,23 @@ After the first visit it works with no connection.
 | Place and crop | Drag, pinch and twist the clip on the preview, with snapping to the center, edges, quarter turns, "fits" and "fills"; up to 90% of it can leave the frame. Tap once for a transform box (scale, turn, crop). |
 | Text | Several fonts and colors; the next text starts from the last style you used. Text is a picture like any other. |
 | Sound | Several sound lanes (mp3, m4a, wav), volume and mute per clip, and the sound of videos is mixed in. |
-| Canvas | 9:16, 4:5, 1:1, 5:4 or 16:9, and a background color. |
-| Export | MP4, 480p / 720p / 1080p, 24 / 30 / 60 fps, quality presets or a bitrate, optional split into equal or fixed-length parts. Your last export settings are remembered. |
+| Canvas | Ratio (9:16, 4:5, 1:1, 5:4 or 16:9) and a background color. |
+| Export | MP4, 360p / 480p / 720p / 1080p, 24 / 30 / 60 fps, Low / Balanced / High presets or a bitrate on a log slider (0.25 to 16 Mbps, an average target), optional split into equal or fixed-length parts. Your last export settings are remembered. |
+| Feedback | A capsule above your fingers names what you are doing. On Android, short vibrations confirm holds, double taps and snaps (Settings → Vibration; iPhone browsers have no vibration API). |
+| Keyboard | Ctrl+Z undo, Ctrl+Y or Ctrl+Shift+Z redo, Space play, S split, Ctrl+D duplicate, F full preview, Delete remove. A mouse drags and zooms the timeline like a finger. |
 
-Your last project (with the original videos) is kept on the device until you delete it in the settings.
+Your last project (with the original videos) is kept on the device until you delete it in the Timeline panel.
 
 ## Known limits
 
 - It needs a browser with WebCodecs (Chrome / Edge / Android Chrome, Safari 16.4 or newer). Other browsers can't
-  open or export videos. **Settings → This device** shows what your device supports.
+  open or export videos. **Help** shows what your device supports.
 - Sound needs audio decoding and encoding in the browser. Some browsers (older Safari versions in particular)
   lack them, and then exported videos have no sound. The export screen tells you when that happens.
 - The codecs depend on the device. It uses H.264 + AAC when available and says so when it has to fall back.
 - Exporting runs on the main thread: keep the screen on and the app open until it finishes. Long 1080p exports are slow on old phones.
 - Each output part is held in memory while it is written, so very long parts at 1080p / 60 fps can run out of memory on low-end phones. Shorter parts help.
-- A web app can't run while it is closed, so the saved project is never cleaned up automatically. Use the delete button.
+- A web app can't run while it is closed, so the saved project is never cleaned up automatically. Use Delete project in the Timeline panel.
 - Big videos also get a small, light copy (144 to 360 px, set in Settings) made in the background, only for the on-screen preview. Export always reads your original file.
 - At speeds other than 1× the preview plays the clip's sound from a separate, pre-rendered copy (a moment after you press play), because phones often mute video sound at unusual speeds.
 - On iPhone the preview volume may not follow the Sound slider (the browser limits it); the export always does. The lock screen may show a bare player while a preview plays; a web page cannot fully switch that off.
@@ -87,7 +79,7 @@ npm run build    # type-check + production build into dist/, including the servi
 ```
 
 Preact + TypeScript + Vite. Decoding and encoding use WebCodecs through [Mediabunny](https://mediabunny.dev) (MPL-2.0).
-Pushes to `main` deploy to GitHub Pages through `.github/workflows/pages.yml`.
+Pushes to `main` deploy to Firebase Hosting through `.github/workflows/firebase-hosting-merge.yml`.
 The icon is `public/icons/icon.svg`; `node scripts/make-icons.cjs` redraws the PNG sizes (needs Playwright).
 
 The export approach (WebCodecs, Mediabunny, canvas rendering) comes from the author's Win-Movie-Faker project.
