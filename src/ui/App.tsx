@@ -3,7 +3,8 @@ import { engine } from '../engine.ts';
 import { outputSize } from '../geometry.ts';
 import { setQuarter } from '../turn.ts';
 import { canPromptInstall, isAndroid, isIOS, isMobile, isStandalone, onInstallChange, promptInstall } from '../install.ts';
-import { deleteClip, deselect, duplicateClip, getState, importFiles, redo, removeGap, removeLane, restore, set, splitAtPlayhead, undo, useStore } from '../store.ts';
+import { activeAt } from '../timeline.ts';
+import { deleteClip, deselect, duplicateClip, getState, importFiles, redo, setMulti, removeGap, removeLane, restore, set, splitAtPlayhead, undo, useStore } from '../store.ts';
 import { CanvasSheet } from './CanvasSheet.tsx';
 import { HelpSheet } from './HelpSheet.tsx';
 import { ExportSheet } from './ExportSheet.tsx';
@@ -71,23 +72,51 @@ export function App() {
     void restore();
   }, []);
 
-  // drag files from the computer onto the page
+  // drag files onto the page: over a timeline lane that lane lights up and the files follow one another on it;
+  // over the preview they go on the yellow line, each on its own layer; anywhere else they go after the last strip
   const [dropping, setDropping] = useState(false);
   useEffect(() => {
     const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    let lit: Element | null = null;
+    let stage: Element | null = null;
+    const where = (e: DragEvent): { lane: Element | null; stage: Element | null } => {
+      const els = document.elementsFromPoint(e.clientX, e.clientY);
+      return { lane: els.find((x) => x.classList.contains('tl-lane')) ?? null, stage: els.find((x) => x.classList.contains('stage')) ?? null };
+    };
+    const clear = () => {
+      lit?.classList.remove('target');
+      stage?.classList.remove('drop-on');
+      lit = null;
+      stage = null;
+    };
     const over = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      setDropping(true);
+      if (getState().project.clips.length === 0) return void setDropping(true); // nothing to aim at yet
+      const w = where(e);
+      if (w.lane !== lit || w.stage !== stage) {
+        clear();
+        lit = w.lane;
+        stage = w.lane ? null : w.stage;
+        lit?.classList.add('target');
+        stage?.classList.add('drop-on');
+      }
     };
     const leave = (e: DragEvent) => {
-      if (!e.relatedTarget) setDropping(false);
+      if (!e.relatedTarget) (setDropping(false), clear());
     };
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       setDropping(false);
-      void importFiles([...(e.dataTransfer?.files ?? [])]);
+      const files = [...(e.dataTransfer?.files ?? [])];
+      const w = where(e);
+      clear();
+      if (getState().project.clips.length === 0) return void importFiles(files);
+      const track = w.lane ? Number((w.lane as HTMLElement).dataset.track) : NaN;
+      if (Number.isFinite(track)) void importFiles(files, 'end', { track });
+      else if (w.stage) void importFiles(files, 'playhead', { stack: true });
+      else void importFiles(files);
     };
     window.addEventListener('dragenter', over);
     window.addEventListener('dragover', over);
@@ -154,13 +183,29 @@ export function App() {
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      // typing somewhere keeps its keys; a file picker that still has focus after choosing files does not count
+      const typing = t && (t.isContentEditable || /^(TEXTAREA|SELECT)$/.test(t.tagName) || (t.tagName === 'INPUT' && !/^(file|button|submit|checkbox|radio|color|range)$/.test((t as HTMLInputElement).type)));
+      if (typing) return;
       const g = getState();
       if (g.project.clips.length === 0 || g.sheet !== 'none') return;
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
       if (mod && k === 'z') (e.preventDefault(), e.shiftKey ? redo() : undo());
       else if (mod && k === 'y') (e.preventDefault(), redo());
+      else if (mod && k === 'a') {
+        // Ctrl+A cycles: the strips under the yellow line, then every strip, then back to the ones under the line
+        e.preventDefault();
+        const cs = g.project.clips;
+        const under = activeAt(cs, g.playhead).map((i) => cs[i]!.id);
+        const all = cs.map((c) => c.id);
+        const same = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
+        const now = g.multi;
+        engine.pause();
+        const partial = under.length > 0 && under.length < all.length;
+        if (partial && same(now, under)) setMulti(all);
+        else if (under.length > 0) setMulti(under);
+        else setMulti(all);
+      }
       else if (mod && k === 'd') (e.preventDefault(), g.selected >= 0 && (engine.pause(), duplicateClip(g.selected)));
       else if (mod || e.altKey) return;
       else if (k === ' ') (e.preventDefault(), g.playing ? engine.pause() : void engine.play());

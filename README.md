@@ -49,8 +49,9 @@ After the first visit it works with no connection.
 | Sound | Several sound lanes (mp3, m4a, wav), volume and mute per clip, and the sound of videos is mixed in. |
 | Canvas | Ratio (9:16, 4:5, 1:1, 5:4 or 16:9) and a background color. |
 | Export | MP4, 360p / 480p / 720p / 1080p, 24 / 30 / 60 fps, Low / Balanced / High presets or a bitrate on a log slider (0.25 to 16 Mbps, an average target), optional split into equal or fixed-length parts. Your last export settings are remembered. |
+| Drag and drop | Drag files from your computer (or from another app on a tablet) onto the editor. Over a timeline lane, the lane lights up and the files follow one another on it (no new lanes are made). Over the preview, even in full preview, they land on the yellow line, each on its own layer. |
 | Feedback | A capsule above your fingers names what you are doing. On Android, short vibrations confirm holds, double taps and snaps (Settings → Vibration; iPhone browsers have no vibration API). |
-| Keyboard | Ctrl+Z undo, Ctrl+Y or Ctrl+Shift+Z redo, Space play, S split, Ctrl+D duplicate, F full preview, Delete remove. A mouse drags and zooms the timeline like a finger. |
+| Keyboard | Ctrl+Z undo, Ctrl+Y or Ctrl+Shift+Z redo, Space play, S split, Ctrl+D duplicate, Ctrl+A select (press again: every strip, again: back to the strips under the yellow line), F full preview, Delete remove. A mouse drags and zooms the timeline like a finger. |
 
 Your last project (with the original videos) is kept on the device until you delete it in the Timeline panel.
 

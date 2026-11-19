@@ -617,7 +617,8 @@ export function setName(name: string): void {
 
 // ---------- import ----------
 
-export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'replace' = 'end'): Promise<void> {
+/** opts.track: the files follow one another on that lane (when it suits their kind); opts.stack: as layers, all starting at the yellow line */
+export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'replace' = 'end', opts: { track?: number; stack?: boolean } = {}): Promise<void> {
   if (files.length === 0) return;
   // replacing: the first file takes the place of the selected strip
   const replaced = mode === 'replace' && state.multi.length === 0 ? state.project.clips[state.selected] : undefined;
@@ -664,9 +665,10 @@ export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'rep
         // as a layer: starts at the yellow line, on the first free lane, one file after another
         at = Math.round(cursor * 100) / 100;
         track = freeTrack([...state.project.clips, ...added], at, end, base);
-        cursor = at + end;
+        if (!opts.stack) cursor = at + end;
       } else {
-        // new clips go to the end of their lane, one after another
+        // new clips go to the end of their lane, one after another (a lane that was aimed at is used when the kind fits: sound under 0, the rest from 0 up)
+        if (opts.track !== undefined && (audio ? opts.track < 0 : opts.track >= 0)) track = opts.track;
         at = endOfTrack([...state.project.clips, ...added], track);
       }
       const fresh: Clip = { id: newId(), mediaId: id, start: 0, end: replaced && !audio ? Math.min(end, image && replaced.speed ? (replaced.end - replaced.start) / replaced.speed : replaced.end - replaced.start) : end, speed: 1, view: { ...IDENTITY_VIEW }, volume: 1, keepPitch: true, at, track };

@@ -160,6 +160,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   const cropTimer = useRef(0);
   const holdTimer = useRef(0);
   const modeSay = useRef(0);
+  const tapMode = useRef<boolean | null>(null);
   const autoPicked = useRef(false);
   const frame = useRef(0);
   const sizes = useRef({ boxW, boxH });
@@ -937,8 +938,17 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     window.setTimeout(() => !fine.current && showBadge(''), 700);
   };
   useEffect(() => {
-    handleDouble = () => doubleTap(0, 0);
-    handleSingle = () => getState().multi.length === 0 && swapMode();
+    handleDouble = () => {
+      // the first tap of this double tap may already have swapped the mode (slow second tap): undo that first
+      if (tapMode.current !== null && getState().handles !== tapMode.current) set({ handles: tapMode.current });
+      tapMode.current = null;
+      doubleTap(0, 0);
+    };
+    handleSingle = () => {
+      if (getState().multi.length > 0) return;
+      tapMode.current = getState().handles;
+      swapMode();
+    };
     return () => {
       handleDouble = null;
       handleSingle = null;

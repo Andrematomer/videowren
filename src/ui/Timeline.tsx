@@ -938,7 +938,7 @@ export function Timeline() {
             <div class="tl-void" style={{ left: 0, width: `${padL}px` }} />
             <div class="tl-void" style={{ left: `${padL + total * pps}px`, right: 0 }} />
             {lanes.map((track, row) => (
-              <div key={track} class={`tl-lane ${move?.track === track ? 'target' : ''}`} style={{ top: `${rowTop(row)}px`, height: `${ROW}px` }} onClick={(e) => laneTap(e, track)}>
+              <div key={track} data-track={track} class={`tl-lane ${move?.track === track ? 'target' : ''}`} style={{ top: `${rowTop(row)}px`, height: `${ROW}px` }} onClick={(e) => laneTap(e, track)}>
                 <span class="tl-lane-name">{track}</span>
               </div>
             ))}
