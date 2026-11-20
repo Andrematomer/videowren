@@ -84,7 +84,13 @@ export function Preview() {
     void engine.showAt(Math.min(getState().playhead, totalOf(project.clips))).then(() => set({ playhead: engine.tl }));
   }, [idsKey, selected]);
 
-  if (!has) return <div class="stage" ref={wrap} />;
+  // nothing added yet: the empty canvas is still drawn, so its shape can be chosen first
+  if (!has)
+    return (
+      <div class="stage" ref={wrap}>
+        <div class="frame" style={{ width: `${box.w}px`, height: `${box.h}px`, background: project.settings.background }} />
+      </div>
+    );
 
   return (
     <div class="stage" ref={wrap} onClick={(e) => e.target === e.currentTarget && deselect()}>
@@ -266,6 +272,11 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   };
   /** ends everything: saves the picture where it is and forgets all fingers */
   const flush = () => {
+    if (band.current) {
+      band.current = null;
+      paintBand();
+      releaseHud();
+    }
     clearTimeout(timer.current);
     pts.current.clear();
     arm.current.clear();
@@ -392,8 +403,9 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     const p = localPoint(r, cx, cy);
     return { x: p.x - sizes.current.boxW / 2, y: p.y - sizes.current.boxH / 2 };
   };
-  /** the top-most visible strip under a point (client coordinates), or -1 for empty canvas */
-  const hitAt = (cx: number, cy: number): number => {
+  /** every visible picture under a point (client coordinates), front-most first */
+  const hitsAt = (cx: number, cy: number): number[] => {
+    const out: number[] = [];
     const st0 = getState();
     const visible = activeAt(st0.project.clips, st0.playhead);
     const q = relClient(cx, cy);
@@ -413,10 +425,12 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       const ly = -dx * Math.sin(a) + dy * Math.cos(a);
       const pw = m.width * sc;
       const ph = m.height * sc;
-      if (lx >= -pw / 2 + k.l * pw && lx <= pw / 2 - k.r * pw && ly >= -ph / 2 + k.t * ph && ly <= ph / 2 - k.b * ph) return i;
+      if (lx >= -pw / 2 + k.l * pw && lx <= pw / 2 - k.r * pw && ly >= -ph / 2 + k.t * ph && ly <= ph / 2 - k.b * ph) out.push(i);
     }
-    return -1;
+    return out;
   };
+  /** the top-most visible strip under a point, or -1 for empty canvas */
+  const hitAt = (cx: number, cy: number): number => hitsAt(cx, cy)[0] ?? -1;
   /** a tap on the picture: a strip under the finger is selected (or, in multi-selection, added or taken out); empty canvas selects nothing */
   const pickAt = (cx: number, cy: number) => {
     const st0 = getState();
@@ -528,6 +542,16 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       const h0 = hitAt(e.clientX, e.clientY);
       if (h0 >= 0) {
         selectClip(h0, { keepPlayhead: true });
+        autoPicked.current = true;
+      }
+    }
+    // something else is selected: one picture under the finger takes over the selection; with several stacked there,
+    // the selected one keeps it when it is one of them (even if it is not in front), otherwise the front one is taken
+    else if (e.isPrimary && selBefore >= 0 && st0.multi.length === 0) {
+      const hits = hitsAt(e.clientX, e.clientY);
+      const pick = hits.length === 0 || hits.includes(getState().selected) ? -1 : hits[0]!;
+      if (pick >= 0) {
+        selectClip(pick, { keepPlayhead: true });
         autoPicked.current = true;
       }
     }
@@ -833,7 +857,8 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
         const prevHandles = getState().handles;
         if (autoPicked.current) {
           // this touch already picked the picture on touch-down: it must not also swap select and edit mode
-          lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev: -1, prevMulti: [], prevHandles: false };
+          // a double tap then works on that picture (it stays picked), in select mode
+          lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev: getState().selected, prevMulti: [], prevHandles: false };
           autoPicked.current = false;
           return;
         }
@@ -965,6 +990,9 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   };
 
   return (
+    <>
+    {/* the whole preview area around the canvas takes the same touches (a box selection can start out there) */}
+    <div class="gestures-around" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onWheel={wheel} />
     <div class="gestures" ref={root} key={selected} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onWheel={wheel}>
       <div class="guide v" ref={guideV} />
       <div class="guide h" ref={guideH} />
@@ -977,6 +1005,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       <div class="guide gy" ref={gy} />
       <div class="gesture-badge num" ref={badge} />
     </div>
+    </>
   );
 }
 

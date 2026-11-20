@@ -606,7 +606,11 @@ export function splitAtPlayhead(): boolean {
   return true;
 }
 
+/** the canvas shape was picked by hand on an empty project: the first picture added must not change it */
+let canvasChosen = false;
+
 export function setSettings(patch: Partial<ExportSettings>): void {
+  if (patch.aspect !== undefined && state.project.clips.length === 0) canvasChosen = true;
   edit((p) => ({ ...p, settings: { ...p.settings, ...patch } }), { history: false });
   savePrefs(state.project.settings);
 }
@@ -667,8 +671,8 @@ export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'rep
         track = freeTrack([...state.project.clips, ...added], at, end, base);
         if (!opts.stack) cursor = at + end;
       } else {
-        // new clips go to the end of their lane, one after another (a lane that was aimed at is used when the kind fits: sound under 0, the rest from 0 up)
-        if (opts.track !== undefined && (audio ? opts.track < 0 : opts.track >= 0)) track = opts.track;
+        // new clips go to the end of their lane, one after another (a lane that was aimed at is used whatever the kind)
+        if (opts.track !== undefined) track = opts.track;
         at = endOfTrack([...state.project.clips, ...added], track);
       }
       const fresh: Clip = { id: newId(), mediaId: id, start: 0, end: replaced && !audio ? Math.min(end, image && replaced.speed ? (replaced.end - replaced.start) / replaced.speed : replaced.end - replaced.start) : end, speed: 1, view: { ...IDENTITY_VIEW }, volume: 1, keepPitch: true, at, track };
@@ -684,7 +688,7 @@ export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'rep
   if (failed) toast(failed > 1 ? `${failed} files could not be opened. ${lastError}` : lastError);
   if (added.length === 0) return;
   const firstNew = state.project.clips.length - (replaced ? 1 : 0);
-  const first = state.project.clips.length === 0 ? (added.map((c) => media[c.mediaId]!).find((m) => m.kind !== 'audio') ?? null) : null;
+  const first = state.project.clips.length === 0 && !canvasChosen ? (added.map((c) => media[c.mediaId]!).find((m) => m.kind !== 'audio') ?? null) : null;
   edit((p) => ({
     ...p,
     clips: [...p.clips.filter((c) => c.id !== replaced?.id), ...added],
@@ -766,6 +770,7 @@ export async function restore(): Promise<void> {
 
 export async function discardProject(): Promise<void> {
   dropAllMedia();
+  canvasChosen = false;
   await clearSaved();
   clearHistory();
   set({ project: freshProject(), selected: -1, playhead: 0, playing: false, sheet: 'none', tool: 'speed' });

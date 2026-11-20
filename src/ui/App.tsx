@@ -72,15 +72,17 @@ export function App() {
     void restore();
   }, []);
 
-  // drag files onto the page: over a timeline lane that lane lights up and the files follow one another on it;
-  // over the preview they go on the yellow line, each on its own layer; anywhere else they go after the last strip
-  const [dropping, setDropping] = useState(false);
+  // drag files onto the page: over a timeline lane that lane lights up and the files follow one another on it (held on the
+  // top or bottom lane, more lanes open); over the preview area they go on the yellow line, each on its own layer
   useEffect(() => {
     const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
     let lit: Element | null = null;
     let stage: Element | null = null;
-    const where = (e: DragEvent): { lane: Element | null; stage: Element | null } => {
-      const els = document.elementsFromPoint(e.clientX, e.clientY);
+    let pos = { x: 0, y: 0 };
+    let edge: { side: string; since: number } | null = null;
+    let timer = 0;
+    const where = () => {
+      const els = document.elementsFromPoint(pos.x, pos.y);
       return { lane: els.find((x) => x.classList.contains('tl-lane')) ?? null, stage: els.find((x) => x.classList.contains('stage')) ?? null };
     };
     const clear = () => {
@@ -89,11 +91,8 @@ export function App() {
       lit = null;
       stage = null;
     };
-    const over = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      if (getState().project.clips.length === 0) return void setDropping(true); // nothing to aim at yet
-      const w = where(e);
+    const update = () => {
+      const w = where();
       if (w.lane !== lit || w.stage !== stage) {
         clear();
         lit = w.lane;
@@ -101,18 +100,41 @@ export function App() {
         lit?.classList.add('target');
         stage?.classList.add('drop-on');
       }
+      // held on the highest or lowest lane: a new lane opens now and then
+      const lanes = [...document.querySelectorAll('.tl-lane')];
+      const side = lit && lit === lanes[0] ? 'top' : lit && lit === lanes[lanes.length - 1] ? 'bottom' : '';
+      if (!side) edge = null;
+      else if (!edge || edge.side !== side) edge = { side, since: performance.now() };
+      else if (performance.now() - edge.since > 420) {
+        edge.since = performance.now();
+        window.dispatchEvent(new CustomEvent('pc-lanes', { detail: side }));
+        window.setTimeout(update, 60); // the lanes are drawn again: aim again
+      }
+    };
+    const stop = () => {
+      clearInterval(timer);
+      timer = 0;
+      edge = null;
+      clear();
+      window.dispatchEvent(new CustomEvent('pc-lanes', { detail: 'reset' }));
+    };
+    const over = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      pos = { x: e.clientX, y: e.clientY };
+      update();
+      if (!timer) timer = window.setInterval(update, 150); // a drag that stands still sends no events
     };
     const leave = (e: DragEvent) => {
-      if (!e.relatedTarget) (setDropping(false), clear());
+      if (!e.relatedTarget) stop();
     };
     const drop = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
-      setDropping(false);
+      pos = { x: e.clientX, y: e.clientY };
       const files = [...(e.dataTransfer?.files ?? [])];
-      const w = where(e);
-      clear();
-      if (getState().project.clips.length === 0) return void importFiles(files);
+      const w = where();
+      stop();
       const track = w.lane ? Number((w.lane as HTMLElement).dataset.track) : NaN;
       if (Number.isFinite(track)) void importFiles(files, 'end', { track });
       else if (w.stage) void importFiles(files, 'playhead', { stack: true });
@@ -122,11 +144,14 @@ export function App() {
     window.addEventListener('dragover', over);
     window.addEventListener('dragleave', leave);
     window.addEventListener('drop', drop);
+    window.addEventListener('dragend', stop);
     return () => {
+      stop();
       window.removeEventListener('dragenter', over);
       window.removeEventListener('dragover', over);
       window.removeEventListener('dragleave', leave);
       window.removeEventListener('drop', drop);
+      window.removeEventListener('dragend', stop);
     };
   }, []);
 
@@ -256,8 +281,6 @@ export function App() {
         <Empty onEnter={() => setEntered(true)} />
       )}
 
-
-      {dropping && <div class="drop-hint">Drop to add</div>}
 
       {toast && (
         <div class="toast" role="status">

@@ -108,6 +108,17 @@ export function Timeline() {
   const rowAuto = useStore((s) => s.prefs.rowAuto);
   const [viewH, setViewH] = useState(200);
   const [ext, setExt] = useState({ hi: 0, lo: 0 });
+  // files dragged in from outside open lanes the same way a held strip does (App.tsx sends these)
+  useEffect(() => {
+    const more = (e: Event) => {
+      const side = (e as CustomEvent<string>).detail;
+      if (side === 'reset') return setExt({ hi: 0, lo: 0 });
+      setExt((x) => (side === 'top' ? { ...x, hi: x.hi + 1 } : { ...x, lo: x.lo + 1 }));
+      if (side === 'bottom') requestAnimationFrame(() => requestAnimationFrame(() => scroller.current && (scroller.current.scrollTop = scroller.current.scrollHeight)));
+    };
+    window.addEventListener('pc-lanes', more);
+    return () => window.removeEventListener('pc-lanes', more);
+  }, []);
   const lanes = lanesFor(clips, ext);
   // auto: every lane that is shown fits the height of the timeline (between half and double the normal height)
   const autoScale = Math.min(2, Math.max(0.5, ((viewH - RULER - 6) / lanes.length - GAP) / ROW0));
@@ -118,8 +129,8 @@ export function Timeline() {
   const extent = Math.max(total, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
   const width = extent * pps + viewW;
   const height = RULER + lanes.length * (ROW + GAP) + 6;
-  const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width });
-  live.current = { clips, pps, lanes, playhead, media, padL, height, width };
+  const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width, ROW });
+  live.current = { clips, pps, lanes, playhead, media, padL, height, width, ROW };
   const rowTop = (row: number) => RULER + row * (ROW + GAP);
 
   // the size of the viewport decides where the yellow line sits
@@ -487,7 +498,8 @@ export function Timeline() {
     const s = st.current;
     const el = scroller.current;
     if (!s || !s.active || !el) return;
-    const { clips: cs, pps: k, lanes: ln, height: h } = live.current;
+    // everything that changes while lanes are added (lane count, strip height) is read fresh: this function keeps running from an old render
+    const { clips: cs, pps: k, lanes: ln, height: h, ROW } = live.current;
     const clip = cs[s.i];
     if (!clip) return;
     const r = el.getBoundingClientRect();
