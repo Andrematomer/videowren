@@ -1071,12 +1071,18 @@ type Handle = 'tl' | 'tr' | 'br' | 'bl' | 'l' | 't' | 'r' | 'b' | 'rot';
 /** fingers on the screen right now (any element), and whether one of them is on the transform box */
 const fingers = new Set<number>();
 /** fingers down anywhere right now: the transform box mounts after a touch that picked the picture, and must know a finger is already on it */
-let downNow = 0;
+// (a set of the pointers that are down, not a counter: a lost pointerup must not leave a count behind, which hid the box's handles for good)
+const downIds = new Set<number>();
 if (typeof window !== 'undefined') {
-  window.addEventListener('pointerdown', () => void downNow++, true);
-  const lift = () => void (downNow = Math.max(0, downNow - 1));
+  window.addEventListener('pointerdown', (e) => (e.isPrimary && downIds.clear(), void downIds.add(e.pointerId)), true);
+  const lift = (e: PointerEvent) => void downIds.delete(e.pointerId);
   window.addEventListener('pointerup', lift, true);
   window.addEventListener('pointercancel', lift, true);
+  // every finger is off the screen (touch events say so even when a pointerup went missing)
+  const clearAll = () => void downIds.clear();
+  window.addEventListener('touchend', (e) => e.touches.length === 0 && window.setTimeout(clearAll, 0), true);
+  window.addEventListener('touchcancel', (e) => e.touches.length === 0 && window.setTimeout(clearAll, 0), true);
+  window.addEventListener('blur', clearAll);
 }
 const fingerAt = new Map<number, { x: number; y: number }>();
 let adoptFingers: ((list: { id: number; x: number; y: number }[]) => void) | null = null;
@@ -1095,7 +1101,7 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const clip = useStore((s) => s.project.clips[s.selected]);
   const media = useStore((s) => (s.project.clips[s.selected] ? s.project.media[s.project.clips[s.selected]!.mediaId] : undefined));
   const [drag, setDrag] = useState<{ view: View; crop: Crop } | null>(null);
-  const [quiet, setQuiet] = useState(downNow > 0);
+  const [quiet, setQuiet] = useState(downIds.size > 0);
   // while fingers work on the picture the outline stays and follows it; only the handles step aside
   const [liveV, setLiveV] = useState<View | null>(null);
   const [liveC, setLiveC] = useState<Crop | null>(null);
@@ -1112,7 +1118,7 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     tick();
     return () => cancelAnimationFrame(raf);
   }, [quiet]);
-  const st = useRef<{ id: number; h: Handle; p0: Pt; view0: View; crop0: Crop; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; edit: boolean } | null>(null);
+  const st = useRef<{ id: number; h: Handle; p0: Pt; raw0: Pt; off: Pt; moved: boolean; view0: View; crop0: Crop; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; edit: boolean } | null>(null);
 
   const endFine = () => {
     const d = st.current;
@@ -1158,11 +1164,32 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
       if (fingers.size === 0) setQuiet(false);
       else if (fingers.size === 1 && !onBox) setQuiet(true);
     };
+    // fingers that are certainly gone (a lost pointerup): the handles must come back
+    const reset = () => {
+      if (fingers.size === 0 && !onBox) return;
+      fingers.clear();
+      fingerAt.clear();
+      onBox = 0;
+      setQuiet(false);
+    };
+    const touchGone = (e: TouchEvent) => e.touches.length === 0 && void window.setTimeout(reset, 30);
+    const mouseGone = (e: PointerEvent) => e.pointerType === 'mouse' && e.buttons === 0 && reset();
+    const hidden = () => document.hidden && reset();
+    window.addEventListener('touchend', touchGone, true);
+    window.addEventListener('touchcancel', touchGone, true);
+    window.addEventListener('pointermove', mouseGone, true);
+    window.addEventListener('blur', reset);
+    document.addEventListener('visibilitychange', hidden);
     window.addEventListener('pointerdown', down, true);
     window.addEventListener('pointermove', track, true);
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
     return () => {
+      window.removeEventListener('touchend', touchGone, true);
+      window.removeEventListener('touchcancel', touchGone, true);
+      window.removeEventListener('pointermove', mouseGone, true);
+      window.removeEventListener('blur', reset);
+      document.removeEventListener('visibilitychange', hidden);
       window.removeEventListener('pointerdown', down, true);
       window.removeEventListener('pointermove', track, true);
       window.removeEventListener('pointerup', up, true);
@@ -1220,9 +1247,12 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     } catch {
       /* the pointer is gone */
     }
-    const p0 = frameBox(e);
+    // the handle itself counts as the touch point (no jump to where the finger landed on its hitbox), and nothing moves until the finger has travelled a few pixels
+    const raw0 = frameBox(e);
+    const p0 = { x: pos[h].x, y: pos[h].y };
+    const off = { x: p0.x - raw0.x, y: p0.y - raw0.y };
     const frameEl = (e.currentTarget as HTMLElement).parentElement;
-    const d = { id: e.pointerId, h, p0, view0: clip.view, crop0: crop, last: p0, anchor: p0, fineRaw: p0, fineEff: p0, fine: false, timer: 0, frame: frameEl, edit: editing };
+    const d = { id: e.pointerId, h, p0, raw0, off, moved: false, view0: clip.view, crop0: crop, last: p0, anchor: p0, fineRaw: p0, fineEff: p0, fine: false, timer: 0, frame: frameEl, edit: editing };
     st.current = d;
     // hold still on a handle and it moves ten times slower, for exact work
     const arm = () => {
@@ -1245,8 +1275,13 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   /** where the finger counts as being: its real place, or (in fine control) a tenth of the way from where it started */
   const point = (e: PointerEvent): Pt => {
     const d = st.current!;
-    const raw = frameBox(e);
+    const rawF = frameBox(e);
+    const raw = { x: rawF.x + d.off.x, y: rawF.y + d.off.y };
     d.last = raw;
+    if (!d.fine && !d.moved) {
+      if (Math.hypot(rawF.x - d.raw0.x, rawF.y - d.raw0.y) < 6) return d.p0;
+      d.moved = true;
+    }
     if (d.fine) return { x: d.fineEff.x + (raw.x - d.fineRaw.x) * 0.1, y: d.fineEff.y + (raw.y - d.fineRaw.y) * 0.1 };
     if (Math.hypot(raw.x - d.anchor.x, raw.y - d.anchor.y) > 10) {
       d.anchor = raw;
@@ -1492,7 +1527,7 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     window.addEventListener('pc-group-live', on);
     return () => window.removeEventListener('pc-group-live', on);
   }, []);
-  const st = useRef<{ id: number; h: Handle; p0: Pt; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; members: { i: number; v: View }[]; box: { l: number; t: number; r: number; b: number } } | null>(null);
+  const st = useRef<{ id: number; h: Handle; p0: Pt; raw0: Pt; off: Pt; moved: boolean; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; members: { i: number; v: View }[]; box: { l: number; t: number; r: number; b: number } } | null>(null);
 
   const members = multi.length === 0 ? [] : activeAt(clips, playhead).filter((i) => multi.includes(clips[i]!.id) && mediaMap[clips[i]!.mediaId] && mediaMap[clips[i]!.mediaId]!.kind !== 'audio');
   const key = members.join();
@@ -1562,8 +1597,10 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     } catch {
       /* the pointer is gone */
     }
-    const p0 = frameBox(e);
-    const d = { id: e.pointerId, h, p0, last: p0, anchor: p0, fineRaw: p0, fineEff: p0, fine: false, timer: 0, frame: (e.currentTarget as HTMLElement).parentElement, members: members.map((i) => ({ i, v: clips[i]!.view })), box: rest };
+    const raw0 = frameBox(e);
+    const p0 = { x: pos(h).x, y: pos(h).y };
+    const off = { x: p0.x - raw0.x, y: p0.y - raw0.y };
+    const d = { id: e.pointerId, h, p0, raw0, off, moved: false, last: p0, anchor: p0, fineRaw: p0, fineEff: p0, fine: false, timer: 0, frame: (e.currentTarget as HTMLElement).parentElement, members: members.map((i) => ({ i, v: clips[i]!.view })), box: rest };
     st.current = d;
     const arm = () => {
       clearTimeout(d.timer);
@@ -1582,8 +1619,13 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   };
   const point = (e: PointerEvent): Pt => {
     const d = st.current!;
-    const raw = frameBox(e);
+    const rawF = frameBox(e);
+    const raw = { x: rawF.x + d.off.x, y: rawF.y + d.off.y };
     d.last = raw;
+    if (!d.fine && !d.moved) {
+      if (Math.hypot(rawF.x - d.raw0.x, rawF.y - d.raw0.y) < 6) return d.p0;
+      d.moved = true;
+    }
     if (d.fine) return { x: d.fineEff.x + (raw.x - d.fineRaw.x) * 0.1, y: d.fineEff.y + (raw.y - d.fineRaw.y) * 0.1 };
     if (Math.hypot(raw.x - d.anchor.x, raw.y - d.anchor.y) > 10) {
       d.anchor = raw;
