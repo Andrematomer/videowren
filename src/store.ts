@@ -11,7 +11,7 @@ import { activeAt, clipDuration, clipEnd, endOfTrack, overwriteOverlaps, freeTra
 import { DEFAULT_SETTINGS, emptyProject, type Clip, type ExportSettings, type MediaInfo, type Project, type View } from './types.ts';
 
 export type Tool = 'speed' | 'sound' | 'look' | 'effects' | 'clip' | 'text' | 'color' | 'font' | 'outline';
-export type Sheet = 'none' | 'export' | 'settings' | 'canvas' | 'help' | 'timeline';
+export type Sheet = 'none' | 'export' | 'settings' | 'canvas' | 'help';
 
 export interface Toast {
   text: string;
@@ -43,6 +43,8 @@ export interface State {
   gap: Gap | null;
   /** the interface is held still for a moment (after Optimize timeline) so the change can be seen */
   locked: boolean;
+  /** for a moment after a gap is closed, strips glide to their new places */
+  slide: boolean;
   /** the selected strip shows its trim handles */
   handles: boolean;
   /** the crop handles are shown on the preview */
@@ -107,6 +109,7 @@ let state: State = {
   drawer: null,
   gap: null,
   locked: false,
+  slide: false,
   handles: false,
   boxMode: false,
   textEdit: null,
@@ -462,7 +465,7 @@ async function textMedia(text: string, st: TextStyle): Promise<MediaInfo> {
 }
 
 /** A new text ("Text", in the last used style) at the position marker, on the first free lane from 0 up. */
-export type AddMode = 'end' | 'playhead' | 'replace';
+export type AddMode = 'end' | 'playhead' | 'time' | 'replace';
 /** where and for how long a new text or color clip goes: after the last strip, as a layer at the yellow line, or in place of the selected strip */
 /**
  * Replacing a strip keeps everything of it that still applies to the new media: look, effects, opacity,
@@ -489,7 +492,7 @@ function placeNew(mode: AddMode): { at: number; track: number; dur: number; repl
   const sel = mode === 'replace' && state.multi.length === 0 ? state.project.clips[state.selected] : undefined;
   if (sel) return { at: sel.at, track: sel.track, dur: clipDuration(sel), replace: sel.id, old: sel };
   const dur = state.prefs.imageSeconds;
-  if (mode === 'end') return { at: endOfTrack(state.project.clips, 0), track: 0, dur };
+  if (mode === 'end') return { at: totalOf(state.project.clips), track: 0, dur };
   return { at: state.playhead, track: freeTrack(state.project.clips, state.playhead, dur, 0), dur };
 }
 
@@ -622,7 +625,7 @@ export function setName(name: string): void {
 // ---------- import ----------
 
 /** opts.track: the files follow one another on that lane (when it suits their kind); opts.stack: as layers, all starting at the yellow line */
-export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'replace' = 'end', opts: { track?: number; stack?: boolean } = {}): Promise<void> {
+export async function importFiles(files: File[], mode: AddMode = 'end', opts: { track?: number; stack?: boolean } = {}): Promise<void> {
   if (files.length === 0) return;
   // replacing: the first file takes the place of the selected strip
   const replaced = mode === 'replace' && state.multi.length === 0 ? state.project.clips[state.selected] : undefined;
@@ -666,14 +669,20 @@ export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'rep
         at = replaced.at;
         track = replaced.track;
       } else if (mode === 'playhead') {
-        // as a layer: starts at the yellow line, on the first free lane, one file after another
-        at = Math.round(cursor * 100) / 100;
+        // as layers: every file starts at the yellow line, each on the first free lane
+        at = Math.round(state.playhead * 100) / 100;
         track = freeTrack([...state.project.clips, ...added], at, end, base);
-        if (!opts.stack) cursor = at + end;
-      } else {
-        // new clips go to the end of their lane, one after another (a lane that was aimed at is used whatever the kind)
-        if (opts.track !== undefined) track = opts.track;
+      } else if (mode === 'time') {
+        // on current time: one file after another from the yellow line; the lane is settled for the whole group afterwards
+        at = Math.round(cursor * 100) / 100;
+        cursor = at + end;
+      } else if (opts.track !== undefined) {
+        // a lane that was aimed at: the files follow one another on it, whatever their kind
+        track = opts.track;
         at = endOfTrack([...state.project.clips, ...added], track);
+      } else {
+        // after the last strip of the whole timeline
+        at = totalOf([...state.project.clips, ...added]);
       }
       const fresh: Clip = { id: newId(), mediaId: id, start: 0, end: replaced && !audio ? Math.min(end, image && replaced.speed ? (replaced.end - replaced.start) / replaced.speed : replaced.end - replaced.start) : end, speed: 1, view: { ...IDENTITY_VIEW }, volume: 1, keepPitch: true, at, track };
       added.push(replaced ? carried(replaced, state.project.media[replaced.mediaId], info, fresh) : fresh);
@@ -687,6 +696,16 @@ export async function importFiles(files: File[], mode: 'end' | 'playhead' | 'rep
   set({ busy: null });
   if (failed) toast(failed > 1 ? `${failed} files could not be opened. ${lastError}` : lastError);
   if (added.length === 0) return;
+  if (mode === 'time') {
+    // the group moves as one: the first lane where none of its strips collides with something already there
+    const clash = (t: number, group: Clip[]) => group.some((g) => state.project.clips.some((o) => o.track === t && g.at < clipEnd(o) - 1e-6 && o.at < clipEnd(g) - 1e-6));
+    for (const [group, dir, from] of [[added.filter((c) => media[c.mediaId]!.kind !== 'audio'), 1, 0], [added.filter((c) => media[c.mediaId]!.kind === 'audio'), -1, -1]] as const) {
+      if (group.length === 0) continue;
+      let t: number = from;
+      for (let i = 0; i < 200 && clash(t, group); i++) t += dir;
+      for (const c of group) c.track = t;
+    }
+  }
   const firstNew = state.project.clips.length - (replaced ? 1 : 0);
   const first = state.project.clips.length === 0 && !canvasChosen ? (added.map((c) => media[c.mediaId]!).find((m) => m.kind !== 'audio') ?? null) : null;
   edit((p) => ({
@@ -795,9 +814,11 @@ setAwakeMode(state.prefs.awake);
 onProxyWork((working) => set({ preparing: working }));
 onProxyProgress((id, p) => {
   const next = { ...state.proxyProgress };
+  const was = id in next;
   if (p === null) delete next[id];
   else next[id] = p;
   set({ proxyProgress: next });
+  if (was !== (p !== null)) window.dispatchEvent(new Event('pc-proxy')); // started or finished: the preview player follows
 });
 setProxyOrder(() => {
   const ids = state.project.clips.map((c) => c.mediaId);
@@ -813,7 +834,9 @@ export function removeGap(): void {
   const g = state.gap;
   if (!g) return;
   const sel = state.project.clips[state.selected]?.id;
+  set({ slide: true });
   edit((p) => ({ ...p, clips: removeGapFrom(p.clips, g) }));
+  window.setTimeout(() => set({ slide: false }), 450);
   const i = state.project.clips.findIndex((c) => c.id === sel);
   set({ gap: null, selected: i });
 }
@@ -880,6 +903,16 @@ export function ensureWave(id: string): void {
     waving.delete(id);
     if (p) set({ waves: { ...state.waves, [id]: p } });
   });
+}
+
+/** Ctrl+V / Cmd+V: the browser hands over the clipboard with the paste event, so no permission question is asked. Same result as Add > On current time > Clipboard. */
+export async function pasteFromEvent(dt: DataTransfer | null, mode: AddMode = 'time'): Promise<boolean> {
+  if (!dt) return false;
+  const files = [...dt.files].filter((f) => /^(image|video|audio)\//.test(f.type) || isImageFile(f) || isAudioFile(f));
+  if (files.length) return (await importFiles(files, mode), true);
+  const text = dt.getData('text/plain').trim();
+  if (text) return (await addTextClip(mode, text), true);
+  return false;
 }
 
 /** Pastes what is on the clipboard: a picture, video or sound becomes media, plain text becomes a text clip. */

@@ -3122,3 +3122,39 @@ button.tl-time.tap {
   -webkit-user-select: none;
   user-select: none;
 }
+
+/* the pie of a video that is being prepared for the preview: in the middle of its picture on the canvas */
+.build-pie {
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+  padding: 5px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  display: grid;
+  pointer-events: none;
+}
+/* the pie on a strip sits in the middle of the part of the strip you can see */
+.strip-clip .tile-pie,
+.strip-clip .strip-pie {
+  top: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+}
+.add-menu button,
+.add-menu .add-item .add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.add-menu .add-item {
+  display: block;
+}
+.add-menu svg {
+  flex: none;
+  opacity: 0.85;
+}
+/* closing a gap: the strips after it glide to their new places */
+.app.slide .strip-clip:not(.lifted) {
+  transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}

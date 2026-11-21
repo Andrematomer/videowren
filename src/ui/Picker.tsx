@@ -7,7 +7,7 @@ export function FilePicker() {
 }
 
 /** A button that opens the picker. A <label> for the input, so the tap itself opens the system dialog. */
-export function PickLabel({ class: cls, label, mode = 'end', children }: { class: string; label?: string; mode?: 'end' | 'playhead' | 'replace'; children: ComponentChildren }) {
+export function PickLabel({ class: cls, label, mode = 'end', children }: { class: string; label?: string; mode?: 'end' | 'playhead' | 'time' | 'replace'; children: ComponentChildren }) {
   return (
     <label
       htmlFor={PICKER_ID}

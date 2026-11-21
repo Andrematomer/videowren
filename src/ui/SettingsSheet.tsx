@@ -1,4 +1,5 @@
-import { setPrefs, useStore } from '../store.ts';
+import { useState } from 'preact/hooks';
+import { discardProject, setPrefs, useStore } from '../store.ts';
 import { hapticSupported, haptic } from '../haptic.ts';
 import { Plain } from './Fold.tsx';
 import { Sheet } from './Sheet.tsx';
@@ -6,6 +7,8 @@ import { Slider } from './Slider.tsx';
 
 export function SettingsSheet({ onClose }: { onClose: () => void }) {
   const prefs = useStore((s) => s.prefs);
+  const hasProject = useStore((s) => s.project.clips.length > 0);
+  const [confirm, setConfirm] = useState(false);
 
   return (
     <Sheet title="Settings" onClose={onClose}>
@@ -89,6 +92,32 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
           </div>
         </Plain>
       )}
+
+      <Plain title="Project">
+        {!confirm ? (
+          <button class="btn danger" disabled={!hasProject} onClick={() => setConfirm(true)}>
+            Delete project
+          </button>
+        ) : (
+          <>
+            <p class="warn">This deletes every strip and the original videos stored on this device. It cannot be undone. Are you sure?</p>
+            <div class="row">
+              <button
+                class="btn danger"
+                onClick={async () => {
+                  await discardProject();
+                  onClose();
+                }}
+              >
+                Yes, delete project
+              </button>
+              <button class="btn" onClick={() => setConfirm(false)}>
+                Keep it
+              </button>
+            </div>
+          </>
+        )}
+      </Plain>
     </Sheet>
   );
 }

@@ -66,10 +66,37 @@ export function clearProxy(id: string): boolean {
   return true;
 }
 export const mediaEntry = (id: string): Entry | undefined => entries.get(id);
+/** a grey copy of the first frame, shown in place of a video while its preview copy is being made (made once, then remembered) */
+const grays = new Map<string, HTMLCanvasElement | 'wait'>();
+export function mediaGray(id: string, ready: () => void): HTMLCanvasElement | undefined {
+  const g = grays.get(id);
+  if (g === 'wait') return undefined;
+  if (g) return g;
+  const e = entries.get(id);
+  if (!e?.thumb) return undefined;
+  grays.set(id, 'wait');
+  void createImageBitmap(e.thumb)
+    .then((bm) => {
+      const c = document.createElement('canvas');
+      c.width = bm.width;
+      c.height = bm.height;
+      const x = c.getContext('2d')!;
+      x.drawImage(bm, 0, 0);
+      x.globalCompositeOperation = 'saturation'; // a grey on top takes all the colour out and keeps the light
+      x.fillStyle = '#808080';
+      x.fillRect(0, 0, c.width, c.height);
+      bm.close();
+      if (entries.get(id) === e) (grays.set(id, c), ready());
+      else grays.delete(id);
+    })
+    .catch(() => grays.delete(id));
+  return undefined;
+}
 export const mediaPreviewBitmap = (id: string): ImageBitmap | undefined => entries.get(id)?.preview ?? entries.get(id)?.bitmap ?? undefined;
 export const mediaBitmap = (id: string): ImageBitmap | undefined => entries.get(id)?.bitmap ?? undefined;
 
 export function dropMedia(id: string): void {
+  grays.delete(id);
   const e = entries.get(id);
   if (!e) return;
   e.preview?.close();

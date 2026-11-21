@@ -3,13 +3,13 @@ import { keyOf } from '../bake.ts';
 import { engine } from '../engine.ts';
 import { thumbUrl } from '../media.ts';
 import { hold, release as releaseHud, say } from '../hud.ts';
-import { pasteClipboard, addSolid, addTextClip, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
+import { optimizeWithFeedback, pasteClipboard, addSolid, addTextClip, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
 import { PEAKS_PER_SEC } from '../wave.ts';
 import { MIN_CLIP, activeAt, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
 import { PickLabel } from './Picker.tsx';
 import { Pie } from './Pie.tsx';
-import { Copy, Pause, Play, Plus, Redo, Split, Trash, Undo } from './icons.tsx';
+import { AfterIcon, ClockIcon, Copy, GapH, ImageIcon, LayersIcon, PaletteIcon, Pause, PasteIcon, Play, Plus, Redo, ReplaceIcon, Simplify, Trash, TypeIcon, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
@@ -94,7 +94,7 @@ export function Timeline() {
   const [menuUp, setMenuUp] = useState(true);
   const [pps, setPps] = useState(36); // pixels per second
   const [move, setMove] = useState<Move | null>(null);
-  const [kind, setKind] = useState<'end' | 'playhead' | 'replace' | null>(null);
+  const [kind, setKind] = useState<'end' | 'playhead' | 'time' | 'replace' | null>(null);
   const [trim, setTrim] = useState<Trim | null>(null);
   // edit mode: dragging the picked strip sideways slides the picture inside it (the strip keeps its place and length)
   const slipRef = useRef<{ id: number; i: number; x0: number; y0: number; base: { start: number; end: number }; active: boolean; cur: { start: number; end: number } } | null>(null);
@@ -132,6 +132,13 @@ export function Timeline() {
   const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width, ROW });
   live.current = { clips, pps, lanes, playhead, media, padL, height, width, ROW };
   const rowTop = (row: number) => RULER + row * (ROW + GAP);
+  /** where a pie sits on a strip: the middle of the part of the strip that is on screen (like the bin of a gap) */
+  const pieX = (left: number, w: number): number => {
+    const v0 = playhead * pps;
+    const lo = Math.max(left, v0);
+    const hi = Math.min(left + w, v0 + viewW);
+    return w <= 40 || hi <= lo ? w / 2 : Math.max(14, Math.min(w - 14, (lo + hi) / 2 - left));
+  };
 
   // the size of the viewport decides where the yellow line sits
   useEffect(() => {
@@ -854,14 +861,16 @@ export function Timeline() {
                   <>
                     {(
                       [
-                        ['end', 'After last strip'],
-                        ['playhead', 'On a new layer'],
-                        ['replace', 'Replace selected'],
+                        ['end', 'After last strip', <AfterIcon size={18} />],
+                        ['time', 'On current time', <ClockIcon size={18} />],
+                        ['playhead', 'As layers', <LayersIcon size={18} />],
+                        ['replace', 'Replace selected', <ReplaceIcon size={18} />],
                       ] as const
-                    ).map(([mode, name]) => {
+                    ).map(([mode, name, icon]) => {
                       const off = mode === 'replace' && !(selected >= 0 && multi.length === 0);
                       return (
                         <button key={mode} role="menuitem" disabled={off} onClick={() => setKind(mode)}>
+                          {icon}
                           {name}
                         </button>
                       );
@@ -874,11 +883,15 @@ export function Timeline() {
                     </button>
                     {(['media', 'text', 'color', 'clipboard'] as const).map((k) => {
                       const name = k === 'media' ? 'Media' : k === 'text' ? 'Text' : k === 'color' ? 'Color' : 'Clipboard';
+                      const icon = k === 'media' ? <ImageIcon size={18} /> : k === 'text' ? <TypeIcon size={18} /> : k === 'color' ? <PaletteIcon size={18} /> : <PasteIcon size={18} />;
                       const done = () => (setMenu(false), setKind(null));
                       if (k === 'media')
                         return (
                           <PickLabel key={k} class="add-item" label="Add videos, pictures or sound" mode={kind}>
-                            <span onClick={() => window.setTimeout(done, 600)}>{name}</span>
+                            <span class="add-row" onClick={() => window.setTimeout(done, 600)}>
+                              {icon}
+                              {name}
+                            </span>
                           </PickLabel>
                         );
                       return (
@@ -893,6 +906,7 @@ export function Timeline() {
                             else void pasteClipboard(kind);
                           }}
                         >
+                          {icon}
                           {name}
                         </button>
                       );
@@ -903,9 +917,15 @@ export function Timeline() {
             </>
           )}
         </div>
-        <button class="tl-btn" disabled={!hasSel && !gap} onClick={() => (gap ? (gap.lane ? removeLane() : removeGap()) : (engine.pause(), deleteClip(selected)))} aria-label={gap ? (gap.lane ? "Remove the empty lane" : "Remove the gap") : "Delete the selected clip"}>
-          <Trash />
-        </button>
+        {!hasSel && !gap ? (
+          <button class="tl-btn" disabled={clips.length === 0} onClick={optimizeWithFeedback} aria-label="Simplify timeline">
+            <Simplify />
+          </button>
+        ) : (
+          <button class="tl-btn" onClick={() => (gap ? (gap.lane ? removeLane() : removeGap()) : (engine.pause(), deleteClip(selected)))} aria-label={gap ? (gap.lane ? "Remove the empty lane" : "Remove the gap") : "Delete the selected clip"}>
+            <Trash />
+          </button>
+        )}
         <button class="tl-btn" disabled={!canUndo} onClick={undo} aria-label="Undo">
           <Undo />
         </button>
@@ -920,11 +940,17 @@ export function Timeline() {
           }}
           aria-label="Split at the yellow line"
         >
-          <Split />
+          <GapH />
         </button>
-        <button class="tl-btn" disabled={!hasSel} onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
-          <Copy />
-        </button>
+        {!hasSel ? (
+          <button class="tl-btn" onClick={() => (engine.pause(), void pasteClipboard('time'))} aria-label="Paste from the clipboard">
+            <PasteIcon />
+          </button>
+        ) : (
+          <button class="tl-btn" onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
+            <Copy />
+          </button>
+        )}
         <div class="tl-grip" role="separator" aria-orientation="horizontal" aria-label="Pane divider: drag up or down to resize the preview and the timeline">
           <span aria-hidden="true">⇕</span>
         </div>
@@ -1025,7 +1051,7 @@ export function Timeline() {
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}
                   {baking !== undefined && (
-                    <span class="strip-pie" title="Preparing the sound for the preview">
+                    <span class="strip-pie" style={{ left: `${pieX(padL + at * pps, w)}px` }} title="Preparing the sound for the preview">
                       <Pie value={baking} size={Math.max(14, Math.min(22, ROW - 10))} />
                     </span>
                   )}
@@ -1038,8 +1064,8 @@ export function Timeline() {
                   )}
                   <span class="strip-label num">{m?.name ?? ''}</span>
                   {p !== undefined && (
-                    <span class="tile-pie" title="Making a lighter copy for the preview">
-                      <Pie value={p} size={16} />
+                    <span class="tile-pie" style={{ left: `${pieX(padL + at * pps, w)}px` }} title="Making a lighter copy for the preview">
+                      <Pie value={p} size={18} />
                     </span>
                   )}
                   {on && handles && !moving && (

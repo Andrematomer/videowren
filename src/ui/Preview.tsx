@@ -14,7 +14,6 @@ export function Preview() {
   const project = useStore((s) => s.project);
   const selected = useStore((s) => s.selected);
   const busy = useStore((s) => s.busy);
-  const progress = useStore((s) => s.proxyProgress);
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -100,17 +99,47 @@ export function Preview() {
         {box.w > 0 && clip && media && <TransformBox boxW={box.w} boxH={box.h} />}
         {box.w > 0 && <GroupBox boxW={box.w} boxH={box.h} />}
         {busy && <div class="overlay-note">{busy}</div>}
-        {!busy && clip && progress[clip.mediaId] !== undefined && (
-          <div class="overlay-note with-pie">
-            <Pie value={progress[clip!.mediaId]!} size={16} />
-            <span>Making a lighter copy for smooth preview… {Math.round(progress[clip!.mediaId]! * 100)}%</span>
-          </div>
-        )}
+        {box.w > 0 && <BuildPies boxW={box.w} boxH={box.h} />}
       </div>
     </div>
   );
 }
 
+
+/**
+ * A pie in the middle of every picture on screen whose video is still being prepared for the preview. The pie belongs to the
+ * strip on the canvas (it sits where the picture is), and the picture shows as a grey first frame until the copy is ready.
+ */
+function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
+  // one string, so the box only redraws when a pie moves or fills a little more
+  const key = useStore((s) => {
+    const out: string[] = [];
+    for (const i of activeAt(s.project.clips, s.playhead)) {
+      const c = s.project.clips[i]!;
+      const m = s.project.media[c.mediaId];
+      const p = s.proxyProgress[c.mediaId];
+      if (!m || p === undefined || m.kind === 'image' || m.kind === 'audio') continue;
+      const q = quadOf(c, m, W, H);
+      const x = q.reduce((a, b) => a + b.x, 0) / q.length;
+      const y = q.reduce((a, b) => a + b.y, 0) / q.length;
+      out.push(`${c.id},${Math.round(x)},${Math.round(y)},${Math.round(p * 100)}`);
+    }
+    return out.join(';');
+  });
+  if (!key) return null;
+  return (
+    <>
+      {key.split(';').map((k) => {
+        const [id, x, y, p] = k.split(',');
+        return (
+          <span key={id} class="build-pie" style={{ left: `${x}px`, top: `${y}px` }} title="Preparing the preview">
+            <Pie value={Number(p) / 100} size={26} />
+          </span>
+        );
+      })}
+    </>
+  );
+}
 
 const fmtDeg = (d: number) => `${Math.round(d)}°`;
 const MULTI_HOLD_MS = 550; // a still finger on empty canvas or on another picture starts a multi-selection
@@ -868,6 +897,22 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     }
   };
   /** snaps to the closest of the eight tidy placements (quarter turn x fit/fill); again flips fit/fill */
+  /** the pictures slide from where they are to their new placement (same easing as a half or quarter placement), then the change is stored */
+  const glide = (moves: [number, View, View][], done: () => void) => {
+    const t0 = performance.now();
+    const T_MS = 260;
+    const tick = () => {
+      const k = Math.min(1, (performance.now() - t0) / T_MS);
+      const e = 1 - Math.pow(1 - k, 3);
+      engine.liveMany = new Map(moves.map(([i, a, b]) => [i, { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, zoom: a.zoom + (b.zoom - a.zoom) * e, rot: a.rot + normAngle(b.rot - a.rot) * e }]));
+      engine.draw();
+      if (k < 1) return void requestAnimationFrame(tick);
+      engine.liveMany = null;
+      done();
+      engine.draw();
+    };
+    requestAnimationFrame(tick);
+  };
   /** several strips picked: the whole composition (the box around all of them) is fitted into the canvas or made to fill it, as one piece */
   const doubleTapGroup = (members: number[], T: { x: number; y: number; w: number; h: number }) => {
     const st = getState();
@@ -924,7 +969,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       const ny = tcy + s * (cy - uy);
       return [i, { ...v, x: (nx - W / 2) / W, y: (ny - H / 2) / H, zoom: v.zoom * s }];
     });
-    setViews(out);
+    glide(out.map(([i, v]) => [i, st.project.clips[i]!.view, v] as [number, View, View]), () => setViews(out));
     showBadge(s === sFit ? 'Fit' : 'Fill');
     window.setTimeout(() => !fine.current && showBadge(''), 700);
   };
@@ -954,7 +999,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     const sc = clip.crop;
     const crop = media.solid !== undefined || !inset ? sc : { l: Math.max(sc?.l ?? 0, inset.l), t: Math.max(sc?.t ?? 0, inset.t), r: Math.max(sc?.r ?? 0, inset.r), b: Math.max(sc?.b ?? 0, inset.b) };
     const v = clampView(snapEightCropped(clip.view, crop, media.width, media.height, W, H), { sw: media.width, sh: media.height, W, H });
-    updateClip(i, { view: v });
+    glide([[i, clip.view, v]], () => updateClip(i, { view: v }));
     const cw = media.width * (1 - (crop?.l ?? 0) - (crop?.r ?? 0));
     const ch = media.height * (1 - (crop?.t ?? 0) - (crop?.b ?? 0));
     const k = baseScale(cw, ch, W, H) / baseScale(media.width, media.height, W, H);
@@ -1155,6 +1200,8 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     tick();
     return () => cancelAnimationFrame(raf);
   }, [quiet]);
+  const dragFrame = useRef(0);
+  const dragLast = useRef<{ view: View; crop: Crop } | null>(null);
   const st = useRef<{ id: number; h: Handle; p0: Pt; raw0: Pt; off: Pt; moved: boolean; view0: View; crop0: Crop; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; edit: boolean } | null>(null);
 
   const endFine = () => {
@@ -1166,6 +1213,9 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   };
   const cancel = () => {
     if (!st.current) return;
+    cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = 0;
+    dragLast.current = null;
     endFine();
     st.current = null;
     setDrag(null);
@@ -1416,15 +1466,25 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     return { view: v0, crop: c0 };
   };
 
+  // pointer events come faster than the screen draws (a mouse or pen can send several hundred a second): the picture is redrawn
+  // once per frame with the latest position, as the finger gestures do. Drawing a long, large video on every event made the handles lag.
   const move = (e: PointerEvent) => {
     if (!st.current || st.current.id !== e.pointerId) return;
     const r = solve(e);
-    setDrag(r);
     engine.live = { index: selected, view: r.view };
     engine.cropLive = { index: selected, crop: r.crop };
     engine.ghost = !stretch && st.current.edit && st.current.h !== 'rot'; // while cutting, the cut-off part shows faintly
-    if (st.current.h !== 'rot') hold(st.current.edit ? 'Crop' : `Scale ${Math.round(r.view.zoom * 100)}%`);
-    engine.draw();
+    dragLast.current = r;
+    if (dragFrame.current) return;
+    dragFrame.current = requestAnimationFrame(() => {
+      dragFrame.current = 0;
+      const d = st.current;
+      const last = dragLast.current;
+      if (!d || !last) return;
+      setDrag(last);
+      if (d.h !== 'rot') hold(d.edit ? 'Crop' : `Scale ${Math.round(last.view.zoom * 100)}%`);
+      engine.draw();
+    });
   };
   const up = (e: PointerEvent) => {
     const d = st.current;
@@ -1433,6 +1493,9 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     const tapped = e.type === 'pointerup' && Math.hypot(d.last.x - d.p0.x, d.last.y - d.p0.y) < 8;
     const r = e.type === 'pointerup' && !tapped ? solve(e) : { view: d.view0, crop: d.crop0 };
     if (tapped) handleTapped();
+    cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = 0;
+    dragLast.current = null;
     showLines(d.frame, null, null);
     endFine();
     st.current = null;
@@ -1519,6 +1582,8 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     window.addEventListener('pc-group-live', on);
     return () => window.removeEventListener('pc-group-live', on);
   }, []);
+  const gFrame = useRef(0);
+  const gLast = useRef<{ f: number; dr: number; P: Pt } | null>(null);
   const st = useRef<{ id: number; h: Handle; p0: Pt; raw0: Pt; off: Pt; moved: boolean; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; members: { i: number; v: View }[]; box: { l: number; t: number; r: number; b: number } } | null>(null);
 
   const members = multi.length === 0 ? [] : activeAt(clips, playhead).filter((i) => multi.includes(clips[i]!.id) && mediaMap[clips[i]!.mediaId] && mediaMap[clips[i]!.mediaId]!.kind !== 'audio');
@@ -1532,6 +1597,8 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   };
   const cancel = () => {
     if (!st.current) return;
+    cancelAnimationFrame(gFrame.current);
+    gFrame.current = 0;
     endFine();
     st.current = null;
     setDrag(null);
@@ -1660,15 +1727,24 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const move = (e: PointerEvent) => {
     if (!st.current || st.current.id !== e.pointerId) return;
     const t = solve(e);
-    setDrag(t);
     engine.liveMany = new Map(views(t));
-    engine.draw();
+    gLast.current = t;
+    if (gFrame.current) return; // once per screen frame, like the single box
+    gFrame.current = requestAnimationFrame(() => {
+      gFrame.current = 0;
+      const l = gLast.current;
+      if (!l || !st.current) return;
+      setDrag(l);
+      engine.draw();
+    });
   };
   const up = (e: PointerEvent) => {
     const d = st.current;
     if (!d || d.id !== e.pointerId) return;
     const tapped = e.type === 'pointerup' && Math.hypot(d.last.x - d.p0.x, d.last.y - d.p0.y) < 8;
     if (tapped) handleTapped();
+    cancelAnimationFrame(gFrame.current);
+    gFrame.current = 0;
     const t = e.type === 'pointerup' && !tapped ? solve(e) : null;
     const out = t ? views(t) : [];
     endFine();

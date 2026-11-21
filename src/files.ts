@@ -1,7 +1,7 @@
 import { importFiles } from './store.ts';
 
 /** Where the next picked files go: after the last strip, or as a layer at the yellow line. Set by the button that opened the picker. */
-export type PickMode = 'end' | 'playhead' | 'replace';
+export type PickMode = import('./store.ts').AddMode;
 let pickMode: PickMode = 'end';
 export const setPickMode = (m: PickMode): void => {
   pickMode = m;

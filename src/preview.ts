@@ -8,6 +8,10 @@ export interface PreviewDeps {
   getUrl(mediaId: string): string | undefined;
   /** the decoded picture when the clip is a still image */
   getImage(mediaId: string): ImageBitmap | undefined;
+  /** true while the small preview copy of a video is being made: the video itself is not played then */
+  isBuilding(mediaId: string): boolean;
+  /** a grey picture of the first frame (shown in place of a video that is being prepared) */
+  getGray(mediaId: string): CanvasImageSource | undefined;
   /** the original file (its sound is what gets baked for the preview) */
   getBlob(mediaId: string): Blob | undefined;
   onTime(t: number): void;
@@ -205,6 +209,12 @@ export class PreviewEngine {
       // effects are off while a picture is being moved, turned or cropped, and come back on release
       const look = { opacity: clip.opacity, grade: clip.grade, fx: clip.fx, crop: this.cropLive && this.cropLive.index === i ? this.cropLive.crop : clip.crop };
       const faint = this.ghost && this.cropLive?.index === i ? { ...look, crop: undefined, opacity: (look.opacity ?? 1) * 0.35 } : null;
+      if (media.kind !== 'image' && this.deps.isBuilding(clip.mediaId)) {
+        // the preview copy is still being made: no decoding of the big file (that made everything lag), a grey first frame stands in
+        const g = this.deps.getGray(clip.mediaId) as (CanvasImageSource & { width: number; height: number }) | undefined;
+        if (g) drawLayer(ctx, g, media.width, media.height, { opacity: look.opacity, crop: look.crop }, { ...o, srcW: g.width, srcH: g.height });
+        continue;
+      }
       const img = this.deps.getImage(clip.mediaId);
       if (img) {
         if (faint) drawLayer(ctx, img, img.width, img.height, faint, o);
@@ -287,7 +297,7 @@ export class PreviewEngine {
 
   private isVideo(clip: Clip): boolean {
     const m = this.deps.getProject().media[clip.mediaId];
-    return !!m && m.kind !== 'image' && m.kind !== 'audio';
+    return !!m && m.kind !== 'image' && m.kind !== 'audio' && !this.deps.isBuilding(clip.mediaId);
   }
 
   /** makes the pool match the timeline at time t: playing clips (and the ones about to start) have an element */

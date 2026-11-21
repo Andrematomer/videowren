@@ -4,7 +4,7 @@ import { outputSize } from '../geometry.ts';
 import { setQuarter } from '../turn.ts';
 import { canPromptInstall, isAndroid, isIOS, isMobile, isStandalone, onInstallChange, promptInstall } from '../install.ts';
 import { activeAt } from '../timeline.ts';
-import { deleteClip, deselect, duplicateClip, getState, importFiles, redo, setMulti, removeGap, removeLane, restore, set, splitAtPlayhead, undo, useStore } from '../store.ts';
+import { toast as say, deleteClip, deselect, duplicateClip, getState, importFiles, pasteFromEvent, redo, setMulti, removeGap, removeLane, restore, set, splitAtPlayhead, undo, useStore } from '../store.ts';
 import { CanvasSheet } from './CanvasSheet.tsx';
 import { HelpSheet } from './HelpSheet.tsx';
 import { ExportSheet } from './ExportSheet.tsx';
@@ -12,7 +12,6 @@ import { Camera, Copy, Gear, Help, Plus, Redo, Shrink, Trash, Undo } from './ico
 import { FilePicker, PickLabel } from './Picker.tsx';
 import { Preview } from './Preview.tsx';
 import { Drawer, TabBar } from './Drawer.tsx';
-import { TimelineSheet } from './TimelineSheet.tsx';
 import { SettingsSheet } from './SettingsSheet.tsx';
 import { saveFrame } from '../frame.ts';
 import { Timeline } from './Timeline.tsx';
@@ -29,6 +28,7 @@ export function App() {
   const sheet = useStore((s) => s.sheet);
   const focus = useStore((s) => s.focus);
   const locked = useStore((s) => s.locked);
+  const slide = useStore((s) => s.slide);
   // Full preview of a wide project on a portrait screen: the whole screen is turned a quarter, so the wide picture fills it
   // (the buttons turn with it). A screen that is already wide (a tab turned by the browser) needs nothing.
   const wide = useStore((s) => {
@@ -246,8 +246,22 @@ export function App() {
     return () => window.removeEventListener('keydown', key);
   }, []);
 
+  // Ctrl+V / Cmd+V (also on a phone or tablet with a keyboard): the same as Add > On current time > Clipboard
+  useEffect(() => {
+    const paste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(TEXTAREA|SELECT)$/.test(t.tagName) || (t.tagName === 'INPUT' && !/^(file|button|submit|checkbox|radio|color|range)$/.test((t as HTMLInputElement).type)))) return;
+      if (getState().sheet !== 'none') return;
+      e.preventDefault();
+      engine.pause();
+      void pasteFromEvent(e.clipboardData).then((ok) => ok || say('The clipboard has no picture, video, sound or text.'));
+    };
+    window.addEventListener('paste', paste);
+    return () => window.removeEventListener('paste', paste);
+  }, []);
+
   return (
-    <div class={`app ${locked ? 'locked' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
+    <div class={`app ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
       <FilePicker />
       {locked && <div class="lock-veil" />}
 
@@ -271,7 +285,6 @@ export function App() {
           {shownSheet === 'export' && <ExportSheet onClose={() => set({ sheet: 'none' })} />}
           {shownSheet === 'help' && <HelpSheet onClose={() => set({ sheet: 'none' })} />}
           {shownSheet === 'canvas' && <CanvasSheet onClose={() => set({ sheet: 'none' })} />}
-          {shownSheet === 'timeline' && <TimelineSheet onClose={() => set({ sheet: 'none' })} />}
           {shownSheet === 'settings' && <SettingsSheet onClose={() => set({ sheet: 'none' })} />}
 
           </div>

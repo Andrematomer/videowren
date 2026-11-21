@@ -4,7 +4,7 @@ import { editText, set, setSolidColor, setSpeed, targets, updateClip, useStore, 
 import { TEXT_FONTS, autoOutline } from '../text.ts';
 import { MAX_SPEED, MIN_SPEED, clipDuration, fmtTime } from '../timeline.ts';
 import type { Fx, Grade, MediaInfo } from '../types.ts';
-import { Download, Effects, FontIcon, Gear, Help, Layers, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
+import { Download, Effects, FontIcon, Gear, Help, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
 import { Slider } from './Slider.tsx';
 import { useSwap } from './swap.ts';
 
@@ -57,11 +57,10 @@ export function TabBar() {
   const tabs = picked.length === 0 ? [] : TABS.map((t) => t.key).filter((k) => picked.every((c) => tabsFor(mediaOf[c.mediaId]).includes(k)) && !(k === 'text' && picked.length > 1));
   const sig = picked.length === 0 ? 'project' : tabs.join() || 'none';
   const { shown, cls } = useSwap({ project: picked.length === 0, tabs }, sig);
-  const openSheet = (name: 'help' | 'canvas' | 'settings' | 'export' | 'timeline') => () => set({ sheet: sheet === name ? 'none' : name, drawer: null });
+  const openSheet = (name: 'help' | 'canvas' | 'settings' | 'export') => () => set({ sheet: sheet === name ? 'none' : name, drawer: null });
   if (shown.project) {
     // nothing selected: the tools of the whole project (they rise over the timeline like any other tool)
-    const items: { name: 'help' | 'canvas' | 'settings' | 'export' | 'timeline'; label: string; icon: preact.JSX.Element }[] = [
-      { name: 'timeline', label: 'Timeline', icon: <Layers /> },
+    const items: { name: 'help' | 'canvas' | 'settings' | 'export'; label: string; icon: preact.JSX.Element }[] = [
       { name: 'help', label: 'Help', icon: <Help /> },
       { name: 'canvas', label: 'Canvas', icon: <i class="canvas-ico" aria-hidden="true" /> },
       { name: 'settings', label: 'Settings', icon: <Gear /> },
