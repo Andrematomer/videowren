@@ -1071,22 +1071,59 @@ type Handle = 'tl' | 'tr' | 'br' | 'bl' | 'l' | 't' | 'r' | 'b' | 'rot';
 /** fingers on the screen right now (any element), and whether one of them is on the transform box */
 const fingers = new Set<number>();
 /** fingers down anywhere right now: the transform box mounts after a touch that picked the picture, and must know a finger is already on it */
-// (a set of the pointers that are down, not a counter: a lost pointerup must not leave a count behind, which hid the box's handles for good)
-const downIds = new Set<number>();
-if (typeof window !== 'undefined') {
-  window.addEventListener('pointerdown', (e) => (e.isPrimary && downIds.clear(), void downIds.add(e.pointerId)), true);
-  const lift = (e: PointerEvent) => void downIds.delete(e.pointerId);
-  window.addEventListener('pointerup', lift, true);
-  window.addEventListener('pointercancel', lift, true);
-  // every finger is off the screen (touch events say so even when a pointerup went missing)
-  const clearAll = () => void downIds.clear();
-  window.addEventListener('touchend', (e) => e.touches.length === 0 && window.setTimeout(clearAll, 0), true);
-  window.addEventListener('touchcancel', (e) => e.touches.length === 0 && window.setTimeout(clearAll, 0), true);
-  window.addEventListener('blur', clearAll);
-}
 const fingerAt = new Map<number, { x: number; y: number }>();
 let adoptFingers: ((list: { id: number; x: number; y: number }[]) => void) | null = null;
 let onBox = 0;
+/** the box that is on screen right now (if any) hears about fingers through these */
+let boxCancel: (() => void) | null = null;
+let boxQuiet: ((v: boolean) => void) | null = null;
+/** the handles are hidden while a finger works on the picture (or two fingers are down) */
+const quietNow = () => fingers.size >= 2 || (fingers.size === 1 && !onBox);
+// The fingers are followed here, for good, and not by the box itself: the box is gone while nothing is selected, and a finger that
+// lifted in that time was never seen, which left the next box (picked with a tap on the picture) without its handles.
+if (typeof window !== 'undefined') {
+  const down = (e: PointerEvent) => {
+    // the first finger of a new touch: anything still remembered from before was lost
+    if (e.isPrimary) (fingers.clear(), fingerAt.clear(), (onBox = 0));
+    fingers.add(e.pointerId);
+    fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const el = e.target as Element | null;
+    const mine = !!el?.closest?.('.tbox-h');
+    if (mine) onBox = e.pointerId;
+    // anything outside the preview (timeline, tabs, header...) puts the box away
+    if (!el?.closest?.('.frame') && getState().boxMode) set({ boxMode: false });
+    if (fingers.size >= 2 || !mine) boxCancel?.();
+    // two fingers on the preview always mean pinch, even when the first one is already on a handle
+    if (fingers.size >= 2 && el?.closest?.('.frame')) adoptFingers?.([...fingerAt].map(([id, p]) => ({ id, x: p.x, y: p.y })));
+    boxQuiet?.(fingers.size >= 2 || !mine);
+  };
+  const track = (e: PointerEvent) => {
+    if (fingerAt.has(e.pointerId)) fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  };
+  const up = (e: PointerEvent) => {
+    fingers.delete(e.pointerId);
+    fingerAt.delete(e.pointerId);
+    if (onBox === e.pointerId) onBox = 0;
+    boxQuiet?.(quietNow());
+  };
+  // fingers that are certainly gone (a lost pointerup): the handles must come back
+  const reset = () => {
+    if (fingers.size === 0 && !onBox) return;
+    fingers.clear();
+    fingerAt.clear();
+    onBox = 0;
+    boxQuiet?.(false);
+  };
+  window.addEventListener('pointerdown', down, true);
+  window.addEventListener('pointermove', track, true);
+  window.addEventListener('pointerup', up, true);
+  window.addEventListener('pointercancel', up, true);
+  window.addEventListener('touchend', (e) => e.touches.length === 0 && void window.setTimeout(reset, 30), true);
+  window.addEventListener('touchcancel', (e) => e.touches.length === 0 && void window.setTimeout(reset, 30), true);
+  window.addEventListener('pointermove', (e) => e.pointerType === 'mouse' && e.buttons === 0 && reset(), true);
+  window.addEventListener('blur', reset);
+  document.addEventListener('visibilitychange', () => document.hidden && reset());
+}
 
 /**
  * The transform box of the selected clip: corners scale, the round handle on top turns, the sides crop.
@@ -1101,7 +1138,7 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const clip = useStore((s) => s.project.clips[s.selected]);
   const media = useStore((s) => (s.project.clips[s.selected] ? s.project.media[s.project.clips[s.selected]!.mediaId] : undefined));
   const [drag, setDrag] = useState<{ view: View; crop: Crop } | null>(null);
-  const [quiet, setQuiet] = useState(downIds.size > 0);
+  const [quiet, setQuiet] = useState(quietNow());
   // while fingers work on the picture the outline stays and follows it; only the handles step aside
   const [liveV, setLiveV] = useState<View | null>(null);
   const [liveC, setLiveC] = useState<Crop | null>(null);
@@ -1138,62 +1175,15 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     engine.draw();
   };
 
+  const cancelRef = useRef(cancel);
+  cancelRef.current = cancel;
   useEffect(() => {
-    const down = (e: PointerEvent) => {
-      // the first finger of a new touch: anything still remembered from before was lost
-      if (e.isPrimary) (fingers.clear(), fingerAt.clear(), (onBox = 0));
-      fingers.add(e.pointerId);
-      fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      const el = e.target as Element | null;
-      const mine = !!el?.closest?.('.tbox-h');
-      if (mine) onBox = e.pointerId;
-      // anything outside the preview (timeline, tabs, header...) puts the box away
-      if (!el?.closest?.('.frame') && getState().boxMode) set({ boxMode: false });
-      if (fingers.size >= 2 || !mine) cancel();
-      // two fingers on the preview always mean pinch, even when the first one is already on a handle
-      if (fingers.size >= 2 && el?.closest?.('.frame')) adoptFingers?.([...fingerAt].map(([id, p]) => ({ id, x: p.x, y: p.y })));
-      setQuiet(fingers.size >= 2 || !mine);
-    };
-    const track = (e: PointerEvent) => {
-      if (fingerAt.has(e.pointerId)) fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    };
-    const up = (e: PointerEvent) => {
-      fingers.delete(e.pointerId);
-      fingerAt.delete(e.pointerId);
-      if (onBox === e.pointerId) onBox = 0;
-      if (fingers.size === 0) setQuiet(false);
-      else if (fingers.size === 1 && !onBox) setQuiet(true);
-    };
-    // fingers that are certainly gone (a lost pointerup): the handles must come back
-    const reset = () => {
-      if (fingers.size === 0 && !onBox) return;
-      fingers.clear();
-      fingerAt.clear();
-      onBox = 0;
-      setQuiet(false);
-    };
-    const touchGone = (e: TouchEvent) => e.touches.length === 0 && void window.setTimeout(reset, 30);
-    const mouseGone = (e: PointerEvent) => e.pointerType === 'mouse' && e.buttons === 0 && reset();
-    const hidden = () => document.hidden && reset();
-    window.addEventListener('touchend', touchGone, true);
-    window.addEventListener('touchcancel', touchGone, true);
-    window.addEventListener('pointermove', mouseGone, true);
-    window.addEventListener('blur', reset);
-    document.addEventListener('visibilitychange', hidden);
-    window.addEventListener('pointerdown', down, true);
-    window.addEventListener('pointermove', track, true);
-    window.addEventListener('pointerup', up, true);
-    window.addEventListener('pointercancel', up, true);
+    boxCancel = () => cancelRef.current();
+    boxQuiet = setQuiet;
+    setQuiet(quietNow()); // fingers that are down right now (the touch that picked this picture) are already counted
     return () => {
-      window.removeEventListener('touchend', touchGone, true);
-      window.removeEventListener('touchcancel', touchGone, true);
-      window.removeEventListener('pointermove', mouseGone, true);
-      window.removeEventListener('blur', reset);
-      document.removeEventListener('visibilitychange', hidden);
-      window.removeEventListener('pointerdown', down, true);
-      window.removeEventListener('pointermove', track, true);
-      window.removeEventListener('pointerup', up, true);
-      window.removeEventListener('pointercancel', up, true);
+      boxCancel = null;
+      boxQuiet = null;
     };
   }, []);
 
@@ -1439,8 +1429,10 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const up = (e: PointerEvent) => {
     const d = st.current;
     if (!d || d.id !== e.pointerId) return;
-    const r = e.type === 'pointerup' ? solve(e) : { view: d.view0, crop: d.crop0 };
-    if (e.type === 'pointerup' && Math.hypot(d.last.x - d.p0.x, d.last.y - d.p0.y) < 8) handleTapped();
+    // a tap changes nothing by itself (and must not write the old transform back over what a double tap just did)
+    const tapped = e.type === 'pointerup' && Math.hypot(d.last.x - d.p0.x, d.last.y - d.p0.y) < 8;
+    const r = e.type === 'pointerup' && !tapped ? solve(e) : { view: d.view0, crop: d.crop0 };
+    if (tapped) handleTapped();
     showLines(d.frame, null, null);
     endFine();
     st.current = null;
@@ -1675,8 +1667,9 @@ function GroupBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const up = (e: PointerEvent) => {
     const d = st.current;
     if (!d || d.id !== e.pointerId) return;
-    if (e.type === 'pointerup' && Math.hypot(d.last.x - d.p0.x, d.last.y - d.p0.y) < 8) handleTapped();
-    const t = e.type === 'pointerup' ? solve(e) : null;
+    const tapped = e.type === 'pointerup' && Math.hypot(d.last.x - d.p0.x, d.last.y - d.p0.y) < 8;
+    if (tapped) handleTapped();
+    const t = e.type === 'pointerup' && !tapped ? solve(e) : null;
     const out = t ? views(t) : [];
     endFine();
     st.current = null;
