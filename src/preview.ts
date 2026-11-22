@@ -258,6 +258,8 @@ export class PreviewEngine {
 
   // ---------- drawing ----------
 
+  /** called after every drawing (the note over a building video follows the picture while it is moved) */
+  onDraw: (() => void) | null = null;
   draw(): void {
     const ctx = this.ctx;
     const canvas = this.canvas;
@@ -303,6 +305,7 @@ export class PreviewEngine {
         drawLayer(ctx, v, v.videoWidth, v.videoHeight, look, o);
       }
     }
+    this.onDraw?.();
   }
 
   // ---------- the pool of video elements ----------

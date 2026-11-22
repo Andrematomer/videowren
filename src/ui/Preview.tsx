@@ -110,34 +110,50 @@ export function Preview() {
  * strip on the canvas (it sits where the picture is); the picture itself shows as a first frame that turns from grey to colour, bottom up.
  */
 function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
-  // one string, so the box only redraws when the note moves, turns, resizes or the percentage changes
+  // which pictures on screen are being prepared, and how far (a string, so the box only redraws when that changes)
   const key = useStore((s) => {
     const out: string[] = [];
     for (const i of activeAt(s.project.clips, s.playhead)) {
       const c = s.project.clips[i]!;
       const m = s.project.media[c.mediaId];
       const p = s.proxyProgress[c.mediaId];
-      if (!m || p === undefined || m.kind === 'image' || m.kind === 'audio') continue;
-      const q = quadOf(c, m, W, H);
-      const x = q.reduce((a, b) => a + b.x, 0) / q.length;
-      const y = q.reduce((a, b) => a + b.y, 0) / q.length;
-      const w = Math.hypot(q[1]!.x - q[0]!.x, q[1]!.y - q[0]!.y);
-      const h = Math.hypot(q[3]!.x - q[0]!.x, q[3]!.y - q[0]!.y);
-      const rot = (Math.atan2(q[1]!.y - q[0]!.y, q[1]!.x - q[0]!.x) * 180) / Math.PI;
-      out.push(`${c.id},${Math.round(x)},${Math.round(y)},${Math.round(w)},${Math.round(h)},${Math.round(rot * 10) / 10},${Math.round(p * 100)}`);
+      if (m && p !== undefined && m.kind !== 'image' && m.kind !== 'audio') out.push(`${i},${Math.round(p * 100)}`);
     }
     return out.join(';');
   });
+  // while a picture is moved, turned, scaled, cropped or sliding into place, the note goes with it, frame by frame
+  const [, tick] = useState(0);
+  useEffect(() => {
+    engine.onDraw = () => {
+      if (engine.live || engine.liveMany || engine.cropLive) tick((n) => n + 1);
+    };
+    return () => {
+      engine.onDraw = null;
+    };
+  }, []);
   if (!key) return null;
+  const st = getState();
   return (
     <>
       {key.split(';').map((k) => {
-        const [id, x, y, w, h, rot, p] = k.split(',');
+        const [is, p] = k.split(',');
+        const i = Number(is);
+        const c = st.project.clips[i];
+        const m = c && st.project.media[c.mediaId];
+        if (!c || !m) return null;
+        const view = engine.liveMany?.get(i) ?? (engine.live && engine.live.index === i ? engine.live.view : c.view);
+        const crop = engine.cropLive && engine.cropLive.index === i ? engine.cropLive.crop : c.crop;
+        const q = quadOf({ ...c, view, crop }, m, W, H);
+        const x = q.reduce((a, b2) => a + b2.x, 0) / q.length;
+        const y = q.reduce((a, b2) => a + b2.y, 0) / q.length;
+        const w = Math.hypot(q[1]!.x - q[0]!.x, q[1]!.y - q[0]!.y);
+        const h = Math.hypot(q[3]!.x - q[0]!.x, q[3]!.y - q[0]!.y);
+        const rot = (Math.atan2(q[1]!.y - q[0]!.y, q[1]!.x - q[0]!.x) * 180) / Math.PI;
         // the note belongs to the picture: it is as big as the picture is, and turns with it
-        const fs = Math.min(Number(w) * 0.12, Number(h) * 0.16);
+        const fs = Math.min(w * 0.12, h * 0.16);
         if (fs < 5) return null;
         return (
-          <span key={id} class="build-note" style={{ left: `${x}px`, top: `${y}px`, fontSize: `${fs}px`, transform: `translate(-50%, -50%) rotate(${rot}deg)` }}>
+          <span key={c.id} class="build-note" style={{ left: `${x}px`, top: `${y}px`, fontSize: `${fs}px`, transform: `translate(-50%, -50%) rotate(${rot}deg)` }}>
             generating
             <br />
             preview
