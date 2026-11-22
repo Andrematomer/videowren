@@ -23,23 +23,24 @@ export function SettingsSheet({ onClose }: { onClose: () => void }) {
         </div>
       </section>
 
-      <Plain title="Preview quality">
-        <div class="chips" role="group" aria-label="Preview size">
+      <Plain title="Video preview quality (needs a restart)">
+        <div class="chips" role="group" aria-label="Video preview size">
           {[144, 240, 360].map((n) => (
-            <button
-              key={n}
-              class={`chip num ${prefs.previewLong === n ? 'on' : ''}`}
-              aria-pressed={prefs.previewLong === n}
-              onClick={() => {
-                if (prefs.previewLong === n) return;
-                setPrefs({ previewLong: n });
-              }}
-            >
+            <button key={n} class={`chip num ${prefs.previewLong === n ? 'on' : ''}`} aria-pressed={prefs.previewLong === n} onClick={() => setPrefs({ previewLong: n })}>
               {n}p
             </button>
           ))}
         </div>
-        
+      </Plain>
+
+      <Plain title="Photo preview quality (needs a restart)">
+        <div class="chips" role="group" aria-label="Photo preview size">
+          {[360, 720, 1080].map((n) => (
+            <button key={n} class={`chip num ${prefs.photoLong === n ? 'on' : ''}`} aria-pressed={prefs.photoLong === n} onClick={() => setPrefs({ photoLong: n })}>
+              {n}p
+            </button>
+          ))}
+        </div>
       </Plain>
 
       <Plain title="Keep the screen on">

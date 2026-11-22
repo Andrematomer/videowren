@@ -7,7 +7,6 @@ import { localPoint } from '../turn.ts';
 import { activeAt, fmtTime, totalOf } from '../timeline.ts';
 import type { Clip, Crop, View } from '../types.ts';
 import { Pause, Play } from './icons.tsx';
-import { Pie } from './Pie.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 
 export function Preview() {
@@ -107,8 +106,8 @@ export function Preview() {
 
 
 /**
- * A pie in the middle of every picture on screen whose video is still being prepared for the preview. The pie belongs to the
- * strip on the canvas (it sits where the picture is), and the picture shows as a grey first frame until the copy is ready.
+ * A note in the middle of every picture on screen whose video is still being prepared for the preview. The note belongs to the
+ * strip on the canvas (it sits where the picture is); the picture itself shows as a first frame that turns from grey to colour, bottom up.
  */
 function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   // one string, so the box only redraws when a pie moves or fills a little more
@@ -122,7 +121,7 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
       const q = quadOf(c, m, W, H);
       const x = q.reduce((a, b) => a + b.x, 0) / q.length;
       const y = q.reduce((a, b) => a + b.y, 0) / q.length;
-      out.push(`${c.id},${Math.round(x)},${Math.round(y)},${Math.round(p * 100)}`);
+      out.push(`${c.id},${Math.round(x)},${Math.round(y)}`);
     }
     return out.join(';');
   });
@@ -130,10 +129,10 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   return (
     <>
       {key.split(';').map((k) => {
-        const [id, x, y, p] = k.split(',');
+        const [id, x, y] = k.split(',');
         return (
-          <span key={id} class="build-pie" style={{ left: `${x}px`, top: `${y}px` }} title="Preparing the preview">
-            <Pie value={Number(p) / 100} size={26} />
+          <span key={id} class="build-note" style={{ left: `${x}px`, top: `${y}px` }}>
+            Generating preview
           </span>
         );
       })}

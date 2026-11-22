@@ -45,7 +45,11 @@ export function registerMedia(id: string, blob: Blob, thumb: Blob | null, extra:
       .catch(() => undefined);
   }
 }
-const PREVIEW_PX = 1280;
+let PREVIEW_PX = 360;
+/** how big the picture drawn in the preview is for a photo (long side); set once at the start of the app */
+export const setPhotoPreviewPx = (n: number): void => {
+  PREVIEW_PX = n;
+};
 
 /** Attaches the small preview copy once it has been made. Returns false if the clip was removed meanwhile. */
 export function setProxy(id: string, proxy: Blob): boolean {
@@ -66,37 +70,61 @@ export function clearProxy(id: string): boolean {
   return true;
 }
 export const mediaEntry = (id: string): Entry | undefined => entries.get(id);
-/** a grey copy of the first frame, shown in place of a video while its preview copy is being made (made once, then remembered) */
-const grays = new Map<string, HTMLCanvasElement | 'wait'>();
-export function mediaGray(id: string, ready: () => void): HTMLCanvasElement | undefined {
-  const g = grays.get(id);
-  if (g === 'wait') return undefined;
-  if (g) return g;
+/** the first frame in colour and in grey, made once and remembered */
+const frames = new Map<string, { gray: HTMLCanvasElement; color: HTMLCanvasElement; wipe: HTMLCanvasElement; pct: number } | 'wait'>();
+/**
+ * The picture shown in place of a video while its preview copy is made: a vertical wipe of the first frame, grey on the
+ * top part and colour on the bottom part, the colour part growing from the bottom as the work gets done (p from 0 to 1).
+ */
+export function mediaWipe(id: string, p: number, ready: () => void): HTMLCanvasElement | undefined {
+  const f = frames.get(id);
+  if (f === 'wait') return undefined;
+  if (f) {
+    const pct = Math.round(Math.min(1, Math.max(0, p)) * 100);
+    if (pct !== f.pct) {
+      f.pct = pct;
+      const w = f.wipe.width;
+      const h = f.wipe.height;
+      const x = f.wipe.getContext('2d')!;
+      x.drawImage(f.gray, 0, 0);
+      const cut = Math.round(h * (1 - pct / 100));
+      if (h - cut > 0) x.drawImage(f.color, 0, cut, w, h - cut, 0, cut, w, h - cut);
+    }
+    return f.wipe;
+  }
   const e = entries.get(id);
   if (!e?.thumb) return undefined;
-  grays.set(id, 'wait');
+  frames.set(id, 'wait');
   void createImageBitmap(e.thumb)
     .then((bm) => {
-      const c = document.createElement('canvas');
-      c.width = bm.width;
-      c.height = bm.height;
-      const x = c.getContext('2d')!;
+      const make = () => {
+        const c = document.createElement('canvas');
+        c.width = bm.width;
+        c.height = bm.height;
+        return c;
+      };
+      const color = make();
+      color.getContext('2d')!.drawImage(bm, 0, 0);
+      const gray = make();
+      const x = gray.getContext('2d')!;
       x.drawImage(bm, 0, 0);
       x.globalCompositeOperation = 'saturation'; // a grey on top takes all the colour out and keeps the light
       x.fillStyle = '#808080';
-      x.fillRect(0, 0, c.width, c.height);
+      x.fillRect(0, 0, gray.width, gray.height);
+      const wipe = make();
       bm.close();
-      if (entries.get(id) === e) (grays.set(id, c), ready());
-      else grays.delete(id);
+      if (entries.get(id) === e) frames.set(id, { gray, color, wipe, pct: -1 });
+      else frames.delete(id);
     })
-    .catch(() => grays.delete(id));
+    .then(() => frames.has(id) && ready())
+    .catch(() => frames.delete(id));
   return undefined;
 }
 export const mediaPreviewBitmap = (id: string): ImageBitmap | undefined => entries.get(id)?.preview ?? entries.get(id)?.bitmap ?? undefined;
 export const mediaBitmap = (id: string): ImageBitmap | undefined => entries.get(id)?.bitmap ?? undefined;
 
 export function dropMedia(id: string): void {
-  grays.delete(id);
+  frames.delete(id);
   const e = entries.get(id);
   if (!e) return;
   e.preview?.close();

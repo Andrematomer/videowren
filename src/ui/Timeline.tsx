@@ -1,13 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { keyOf } from '../bake.ts';
 import { engine } from '../engine.ts';
 import { thumbUrl } from '../media.ts';
 import { hold, release as releaseHud, say } from '../hud.ts';
 import { optimizeWithFeedback, pasteClipboard, addSolid, addTextClip, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
 import { PEAKS_PER_SEC } from '../wave.ts';
-import { MIN_CLIP, activeAt, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, totalOf } from '../timeline.ts';
+import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, freeTrack, gapAt, laneRemovable, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
 import { PickLabel } from './Picker.tsx';
+import { aim } from '../dropAim.ts';
 import { Pie } from './Pie.tsx';
 import { AfterIcon, ClockIcon, Copy, GapH, ImageIcon, LayersIcon, PaletteIcon, Pause, PasteIcon, Play, Plus, Redo, ReplaceIcon, Simplify, Trash, TypeIcon, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
@@ -90,10 +91,23 @@ export function Timeline() {
   const canUndo = useStore((s) => s.canUndo);
   const canRedo = useStore((s) => s.canRedo);
   const hasSel = selected >= 0 && !!clips[selected];
+  // cheap (a pass over the strips), so it is worked out whenever they change: Simplify is greyed out when there is nothing left to tighten
+  const tight = useMemo(() => optimizeLanes(clips).moved === 0, [clips]);
   const [menu, setMenu] = useState(false);
   const [menuUp, setMenuUp] = useState(true);
   const [pps, setPps] = useState(36); // pixels per second
   const [move, setMove] = useState<Move | null>(null);
+  // the open menu is put away by a touch anywhere else, and that same touch goes on to what is underneath (a swipe on the timeline still scrolls it)
+  useEffect(() => {
+    if (!menu) return;
+    const away = (e: PointerEvent) => {
+      if ((e.target as Element | null)?.closest?.('.add-menu, .tl-add')) return;
+      setMenu(false);
+      setKind(null);
+    };
+    window.addEventListener('pointerdown', away, true);
+    return () => window.removeEventListener('pointerdown', away, true);
+  }, [menu]);
   const [kind, setKind] = useState<'end' | 'playhead' | 'time' | 'replace' | null>(null);
   const [trim, setTrim] = useState<Trim | null>(null);
   // edit mode: dragging the picked strip sideways slides the picture inside it (the strip keeps its place and length)
@@ -118,6 +132,68 @@ export function Timeline() {
     };
     window.addEventListener('pc-lanes', more);
     return () => window.removeEventListener('pc-lanes', more);
+  }, []);
+  // files dragged in from outside: where they would land is drawn as yellow outlines (App.tsx sends the finger position)
+  const [ghosts, setGhosts] = useState<{ track: number; at: number; dur: number }[]>([]);
+  useEffect(() => {
+    const D = 3; // the length of an outline: the real length is only known after the files are read
+    let was = '';
+    const prev = (e: Event) => {
+      const d = (e as CustomEvent<{ x: number; y: number; kinds: boolean[]; mode: 'lane' | 'stage' } | null>).detail;
+      const el = scroller.current;
+      const L = live.current;
+      if (!d || !el) {
+        aim.value = null;
+        setGhosts([]);
+        if (was === 'stage') setExt({ hi: 0, lo: 0 }); // the fingers left the preview: the lanes that were opened for it close again
+        was = '';
+        return;
+      }
+      if (was === 'stage' && d.mode === 'lane') setExt({ hi: 0, lo: 0 });
+      was = d.mode;
+      const pseudo = (track: number, at: number): Clip => ({ id: '', mediaId: '', start: 0, end: D, speed: 1, view: { x: 0, y: 0, zoom: 1, rot: 0 }, volume: 1, keepPitch: true, at, track });
+      if (d.mode === 'stage') {
+        // over the preview: every file starts at the yellow line on its own layer (open lanes are added as needed)
+        aim.value = null;
+        const placed: Clip[] = [];
+        for (const audio of d.kinds) placed.push(pseudo(freeTrack([...L.clips, ...placed], L.playhead, D, audio ? -1 : 0), L.playhead));
+        const top = Math.max(...placed.map((c) => c.track), lanesFor(L.clips)[0]!);
+        const bottom = Math.min(...placed.map((c) => c.track), lanesFor(L.clips).at(-1)!);
+        const baseTop = lanesFor(L.clips)[0]!;
+        const baseBottom = lanesFor(L.clips).at(-1)!;
+        setExt((x) => {
+          const n = { hi: Math.max(0, top - baseTop), lo: Math.max(0, baseBottom - bottom) };
+          return n.hi === x.hi && n.lo === x.lo ? x : n;
+        });
+        setGhosts(placed.map((c) => ({ track: c.track, at: c.at, dur: D })));
+        return;
+      }
+      // over a lane: the first file starts under the finger (snapping to strip edges and the yellow line), the rest follow it
+      const r = el.getBoundingClientRect();
+      const row = Math.floor((d.y - r.top + el.scrollTop - RULER) / (L.ROW + GAP));
+      const track = L.lanes[row];
+      if (track === undefined) {
+        aim.value = null;
+        setGhosts([]);
+        return;
+      }
+      let at = Math.max(0, (d.x - r.left + el.scrollLeft - L.padL) / L.pps);
+      const near = 12 / L.pps;
+      let best = near;
+      for (const t of [0, L.playhead, ...L.clips.flatMap((c) => [c.at, clipEnd(c)])]) {
+        if (Math.abs(t - at) < best) (best = Math.abs(t - at)), (at = t);
+      }
+      at = Math.round(at * 100) / 100;
+      aim.value = { track, at };
+      const group = d.kinds.map((_, i) => pseudo(track, at + i * D));
+      const dir = track >= 0 ? 1 : -1;
+      const clash = (t: number) => group.some((g) => L.clips.some((o) => o.track === t && g.at < clipEnd(o) - 1e-6 && o.at < g.at + D - 1e-6));
+      let t = track;
+      for (let i = 0; i < 200 && clash(t); i++) t += dir;
+      setGhosts(group.map((g) => ({ track: t, at: g.at, dur: D })));
+    };
+    window.addEventListener('pc-drop-preview', prev);
+    return () => window.removeEventListener('pc-drop-preview', prev);
   }, []);
   const lanes = lanesFor(clips, ext);
   // auto: every lane that is shown fits the height of the timeline (between half and double the normal height)
@@ -314,7 +390,7 @@ export function Timeline() {
     let pm: { id: number; x: number; left: number; y: number; pps0: number; axis: 'x' | 'y' | null; onStrip: boolean } | null = null;
     const mDown = (e: PointerEvent) => {
       const onStrip = !!(e.target as Element).closest('.strip-clip');
-      if (e.pointerType !== 'mouse' || e.button !== 0 || (e.target as Element).closest('.trim-h') || (!onStrip && (e.target as Element).closest('button'))) return;
+      if ((e.pointerType !== 'mouse' && e.pointerType !== 'pen') || e.button !== 0 || (e.target as Element).closest('.trim-h') || (!onStrip && (e.target as Element).closest('button'))) return;
       touching.current = true;
       clearTimeout(settle.current);
       pm = { id: e.pointerId, x: e.clientX, left: el.scrollLeft, y: e.clientY, pps0: live.current.pps, axis: null, onStrip };
@@ -349,12 +425,28 @@ export function Timeline() {
       }
     };
     const mUp = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse') (touching.current = false), armSettle();
+      if (e.pointerType === 'mouse' || e.pointerType === 'pen') (touching.current = false), armSettle();
       if (!pm || pm.id !== e.pointerId) return;
       const was = pm.axis;
       pm = null;
       if (was) window.setTimeout(() => ((swallow.current = false), (pinching.current = false)), 60);
     };
+    // a pen is handled like a mouse (drag to seek or zoom). The browser would otherwise pan the timeline itself and cancel
+    // the hold for box select, so while a pen hovers over the timeline the browser's own panning is switched off
+    // (a pen has no touchmove events that could be cancelled later, unlike a finger)
+    const penNear = (e: PointerEvent) => {
+      if (e.pointerType === 'pen') el.style.touchAction = 'none';
+    };
+    const penAway = (e: PointerEvent) => {
+      if (e.pointerType === 'pen' && e.buttons === 0) el.style.touchAction = '';
+    };
+    const fingerDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') el.style.touchAction = '';
+    };
+    el.addEventListener('pointerover', penNear);
+    el.addEventListener('pointermove', penNear);
+    el.addEventListener('pointerleave', penAway);
+    el.addEventListener('pointerdown', fingerDown, true);
     el.addEventListener('pointerdown', mDown);
     el.addEventListener('pointermove', mMove);
     el.addEventListener('pointerup', mUp);
@@ -363,7 +455,14 @@ export function Timeline() {
     el.addEventListener('touchmove', mv, { passive: false });
     el.addEventListener('touchend', end, { passive: true });
     el.addEventListener('touchcancel', end, { passive: true });
+    const noMenu = (e: Event) => e.preventDefault(); // a pen held down would otherwise open a context menu and cancel the hold
+    el.addEventListener('contextmenu', noMenu);
     return () => {
+      el.removeEventListener('contextmenu', noMenu);
+      el.removeEventListener('pointerover', penNear);
+      el.removeEventListener('pointermove', penNear);
+      el.removeEventListener('pointerleave', penAway);
+      el.removeEventListener('pointerdown', fingerDown, true);
       el.removeEventListener('pointerdown', mDown);
       el.removeEventListener('pointermove', mMove);
       el.removeEventListener('pointerup', mUp);
@@ -849,13 +948,13 @@ export function Timeline() {
               const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const tab = (document.querySelector('.tabbar') as HTMLElement | null)?.offsetHeight ?? 56;
               setMenuUp(r.top > window.innerHeight - r.bottom - tab);
+              if (menu) setKind(null);
               setMenu(!menu);
             }}>
             <Plus /> <span>Add</span>
           </button>
           {menu && (
             <>
-              <div class="add-scrim" onPointerDown={() => (setMenu(false), setKind(null))} />
               <div class={`add-menu ${menuUp ? 'up' : 'down'}`} role="menu">
                 {!kind ? (
                   <>
@@ -918,7 +1017,7 @@ export function Timeline() {
           )}
         </div>
         {!hasSel && !gap ? (
-          <button class="tl-btn" disabled={clips.length === 0} onClick={optimizeWithFeedback} aria-label="Simplify timeline">
+          <button class="tl-btn" disabled={tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
             <Simplify />
           </button>
         ) : (
@@ -1056,18 +1155,17 @@ export function Timeline() {
                     </span>
                   )}
                   {url && !m?.text && <span class="strip-thumb" style={{ backgroundImage: `url("${url}")`, backgroundPosition: `${-((tr?.at ?? c.at) - c.at) * pps + ((c.start - start) / c.speed) * pps}px center` }} />}
+                  {url && !m?.text && p !== undefined && (
+                    // a video being prepared for the preview: grey on top, colour below, the colour rising as the work gets done
+                    <span class="strip-thumb gray" style={{ backgroundImage: `url("${url}")`, backgroundPosition: `${-((tr?.at ?? c.at) - c.at) * pps + ((c.start - start) / c.speed) * pps}px center`, clipPath: `inset(0 0 ${Math.round(p * 100)}% 0)` }} />
+                  )}
                   {ROW >= 30 && (
                     <span class="strip-time num">
                       {c.speed !== 1 ? `${c.speed}× · ` : ''}
                       {fmtTime((end - start) / c.speed)}
                     </span>
                   )}
-                  <span class="strip-label num">{m?.name ?? ''}</span>
-                  {p !== undefined && (
-                    <span class="tile-pie" style={{ left: `${pieX(padL + at * pps, w)}px` }} title="Making a lighter copy for the preview">
-                      <Pie value={p} size={18} />
-                    </span>
-                  )}
+                  <span class="strip-label num">{(m?.name ?? '') + (p !== undefined ? ' (generating preview)' : '')}</span>
                   {on && handles && !moving && (
                     <>
                       <span class="trim-h left" onPointerDown={trimDown(i, 'left')} onPointerMove={trimMove} onPointerUp={trimUp} onPointerCancel={trimUp} onClick={(e) => e.stopPropagation()} />
@@ -1076,6 +1174,11 @@ export function Timeline() {
                   )}
                 </button>
               );
+            })}
+            {ghosts.map((g, k) => {
+              const row = lanes.indexOf(g.track);
+              if (row < 0) return null;
+              return <div key={`g${k}`} class="drop-ghost" style={{ left: `${padL + g.at * pps}px`, top: `${rowTop(row)}px`, width: `${g.dur * pps}px`, height: `${ROW}px` }} aria-hidden="true" />;
             })}
           </div>
         </div>

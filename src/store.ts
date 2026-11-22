@@ -2,10 +2,10 @@ import { say } from './hud.ts';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ASPECT_VALUE, IDENTITY_VIEW, baseScale, fillZoom, nearestAspect, normAngle, outputSize } from './geometry.ts';
 import { autoOutline, renderSolid, renderText } from './text.ts';
-import { IMAGE_MAX_SECONDS, decodeImage, dropAllMedia, isAudioFile, isImageFile, probeAudio, mediaBlob, newId, probeImage, probeVideo, registerMedia, UnsupportedMediaError } from './media.ts';
+import { IMAGE_MAX_SECONDS, decodeImage, dropAllMedia, isAudioFile, isImageFile, probeAudio, mediaBlob, newId, probeImage, probeVideo, registerMedia, setPhotoPreviewPx, UnsupportedMediaError } from './media.ts';
 import { setAwakeMode } from './wake.ts';
 import { computePeaks } from './wave.ts';
-import { onProxyProgress, onProxyWork, queueProxy, requeueAllProxies, setProxyOrder } from './proxy.ts';
+import { onProxyProgress, onProxyWork, queueProxy, setProxyOrder } from './proxy.ts';
 import { clearSaved, loadSaved, requestPersistence, saveMedia, saveProject } from './persist.ts';
 import { activeAt, clipDuration, clipEnd, endOfTrack, overwriteOverlaps, freeTrack, laneRemovable, optimizeLanes, removeLane as removeLaneFrom, resolveOverlaps, settleAt, MAX_SPEED, MIN_CLIP, MIN_SPEED, removeGap as removeGapFrom, totalOf, type Gap } from './timeline.ts';
 import { DEFAULT_SETTINGS, emptyProject, type Clip, type ExportSettings, type MediaInfo, type Project, type View } from './types.ts';
@@ -66,8 +66,10 @@ export interface State {
 export interface AppPrefs {
   /** how long a picture shows by default, seconds */
   imageSeconds: number;
-  /** long side of the small preview copy, pixels */
+  /** long side of the small preview copy of a video, pixels (used from the next start of the app) */
   previewLong: number;
+  /** long side of the picture the preview draws for a photo, pixels (used from the next start of the app) */
+  photoLong: number;
   /** keep the screen on: always, only while exporting / making preview copies, or never */
   awake: 'on' | 'work' | 'off';
   /** what playback does at the end of the timeline */
@@ -80,7 +82,7 @@ export interface AppPrefs {
   haptics: boolean;
 }
 
-export const DEFAULT_PREFS: AppPrefs = { imageSeconds: 5, previewLong: 240, awake: 'work', onEnd: 'pause', rowScale: 1, rowAuto: true, haptics: true };
+export const DEFAULT_PREFS: AppPrefs = { imageSeconds: 5, previewLong: 144, photoLong: 360, awake: 'work', onEnd: 'pause', rowScale: 1, rowAuto: true, haptics: true };
 
 function loadAppPrefs(): AppPrefs {
   try {
@@ -120,6 +122,10 @@ let state: State = {
   canUndo: false,
   canRedo: false,
 };
+
+/** the preview sizes this run of the app uses: a change in Settings is picked up at the next start (changing them live would blank the timeline) */
+const bootPrefs = { previewLong: state.prefs.previewLong, photoLong: state.prefs.photoLong };
+setPhotoPreviewPx(bootPrefs.photoLong);
 
 const subs = new Set<() => void>();
 export const getState = (): State => state;
@@ -259,7 +265,6 @@ export function setPrefs(patch: Partial<AppPrefs>): void {
   } catch {
     /* ignore */
   }
-  if (patch.previewLong !== undefined) requeueAllProxies(state.project.media);
 }
 
 const SHARED: (keyof Clip)[] = ['volume', 'speed', 'keepPitch', 'opacity', 'grade', 'fx'];
@@ -400,13 +405,15 @@ export function duplicateClip(index: number): void {
   const picked = idx.map((i) => state.project.clips[i]).filter((c): c is Clip => !!c);
   if (picked.length === 0) return;
   // the copies sit at the same time and keep their order and spacing: the whole group moves out by the fewest lanes
-  // that leave every copy on free ground (up from lane 0, down when everything picked is below it)
-  const dir = picked.every((c) => c.track < 0) ? -1 : 1;
+  // that leave every copy on free ground. Copies of strips that all sit below lane 0 go up to lane 0 instead of further down,
+  // so a new copy is always on top of the stack where it is seen
+  const below = picked.every((c) => c.track < 0);
   const fresh = picked.map((c) => ({ ...c, id: newId() }));
   const hit = (a: Clip, b: Clip) => a.at < clipEnd(b) - 1e-6 && b.at < clipEnd(a) - 1e-6;
-  let d = 1;
-  while (d < 200 && fresh.some((f) => state.project.clips.some((o) => o.track === f.track + dir * d && hit({ ...f, track: f.track + dir * d }, o)))) d++;
-  const copies = fresh.map((f) => ({ ...f, track: f.track + dir * d }));
+  const free = (shift: number) => fresh.every((f) => !state.project.clips.some((o) => o.track === f.track + shift && hit({ ...f, track: f.track + shift }, o)));
+  let d = below ? -Math.max(...fresh.map((f) => f.track)) : 1; // below: the top copy lands on lane 0
+  while (d < 400 && !free(d)) d++;
+  const copies = fresh.map((f) => ({ ...f, track: f.track + d }));
   edit((p) => ({ ...p, clips: [...p.clips, ...copies] }));
   const first = state.project.clips.length - copies.length;
   if (copies.length === 1) set({ selected: first });
@@ -625,13 +632,16 @@ export function setName(name: string): void {
 // ---------- import ----------
 
 /** opts.track: the files follow one another on that lane (when it suits their kind); opts.stack: as layers, all starting at the yellow line */
-export async function importFiles(files: File[], mode: AddMode = 'end', opts: { track?: number; stack?: boolean } = {}): Promise<void> {
+export async function importFiles(files: File[], mode: AddMode = 'end', opts: { track?: number; at?: number; stack?: boolean } = {}): Promise<void> {
   if (files.length === 0) return;
   // replacing: the first file takes the place of the selected strip
   const replaced = mode === 'replace' && state.multi.length === 0 ? state.project.clips[state.selected] : undefined;
   if (mode === 'replace') files = files.slice(0, 1);
   const added: Clip[] = [];
-  let cursor = state.playhead;
+  // dropped at a place on a lane (opts.at): like 'on current time' but starting there, on that lane
+  const placed = opts.at !== undefined && opts.track !== undefined;
+  if (placed) mode = 'time';
+  let cursor = placed ? opts.at! : state.playhead;
   const media: Project['media'] = {};
   let failed = 0;
   let lastError = '';
@@ -676,6 +686,7 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
         // on current time: one file after another from the yellow line; the lane is settled for the whole group afterwards
         at = Math.round(cursor * 100) / 100;
         cursor = at + end;
+        if (placed) track = opts.track!;
       } else if (opts.track !== undefined) {
         // a lane that was aimed at: the files follow one another on it, whatever their kind
         track = opts.track;
@@ -687,7 +698,7 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
       const fresh: Clip = { id: newId(), mediaId: id, start: 0, end: replaced && !audio ? Math.min(end, image && replaced.speed ? (replaced.end - replaced.start) / replaced.speed : replaced.end - replaced.start) : end, speed: 1, view: { ...IDENTITY_VIEW }, volume: 1, keepPitch: true, at, track };
       added.push(replaced ? carried(replaced, state.project.media[replaced.mediaId], info, fresh) : fresh);
       void saveMedia(id, { blob: file, name: file.name, thumb });
-      queueProxy(id, info, state.prefs.previewLong);
+      queueProxy(id, info, bootPrefs.previewLong);
     } catch (e) {
       failed++;
       lastError = e instanceof UnsupportedMediaError ? e.message : `Could not open "${file.name}".`;
@@ -699,7 +710,8 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
   if (mode === 'time') {
     // the group moves as one: the first lane where none of its strips collides with something already there
     const clash = (t: number, group: Clip[]) => group.some((g) => state.project.clips.some((o) => o.track === t && g.at < clipEnd(o) - 1e-6 && o.at < clipEnd(g) - 1e-6));
-    for (const [group, dir, from] of [[added.filter((c) => media[c.mediaId]!.kind !== 'audio'), 1, 0], [added.filter((c) => media[c.mediaId]!.kind === 'audio'), -1, -1]] as const) {
+    const groups = placed ? ([[added, opts.track! >= 0 ? 1 : -1, opts.track!]] as const) : ([[added.filter((c) => media[c.mediaId]!.kind !== 'audio'), 1, 0], [added.filter((c) => media[c.mediaId]!.kind === 'audio'), -1, -1]] as const);
+    for (const [group, dir, from] of groups) {
       if (group.length === 0) continue;
       let t: number = from;
       for (let i = 0; i < 200 && clash(t, group); i++) t += dir;
@@ -755,9 +767,11 @@ export async function restore(): Promise<void> {
       const info = saved.project.media[id];
       try {
         const bitmap = info?.kind === 'image' ? await decodeImage(m.blob) : null;
-        registerMedia(id, m.blob, m.thumb, { name: m.name, proxy: m.proxy ?? null, bitmap });
+        // a copy made at another preview size (the setting was changed before this start) is made again
+        const fresh = !!m.proxy && (m.proxyLong ?? 240) === bootPrefs.previewLong;
+        registerMedia(id, m.blob, m.thumb, { name: m.name, proxy: fresh ? m.proxy : null, bitmap });
         usable.add(id);
-        if (info && !m.proxy) queueProxy(id, info, state.prefs.previewLong);
+        if (info && !fresh) queueProxy(id, info, bootPrefs.previewLong);
       } catch {
         /* a picture that no longer decodes is dropped below */
       }
@@ -818,6 +832,7 @@ onProxyProgress((id, p) => {
   if (p === null) delete next[id];
   else next[id] = p;
   set({ proxyProgress: next });
+  if (p !== null) window.dispatchEvent(new Event('pc-proxy-tick'));
   if (was !== (p !== null)) window.dispatchEvent(new Event('pc-proxy')); // started or finished: the preview player follows
 });
 setProxyOrder(() => {
@@ -935,7 +950,8 @@ export async function pasteClipboard(mode: AddMode): Promise<void> {
       const t = (await navigator.clipboard.readText()).trim();
       if (t) return void (await addTextClip(mode, t));
     }
-    toast('The clipboard has no picture, video, sound or text.');
+    // files copied in a file manager are not readable by a button (only a real Ctrl+V hands them over)
+    toast(typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? 'Nothing readable on the clipboard. For copied files, press Ctrl+V (Cmd+V) instead.' : 'The clipboard has no picture, video, sound or text.');
   } catch {
     toast("The clipboard could not be read. Allow pasting when the browser asks, then try again.");
   }

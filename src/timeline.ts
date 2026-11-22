@@ -112,31 +112,19 @@ export function gapAt(clips: Clip[], track: number, t: number): Gap | null {
 }
 
 /**
- * Closes a gap: every clip that starts at or after its end moves earlier by the gap's length, on all
- * lanes. A moved clip that would land on another clip of its lane goes to the next lane out (see
- * resolveOverlaps).
+ * Closes a gap: the strips of its own lane that start at or after its end move earlier by the gap's length. Other
+ * lanes stay as they are, unless nothing on any lane is in that time span: then it is a gap of the whole timeline
+ * and every strip that starts after it moves earlier.
  */
 export function removeGap(clips: Clip[], gap: Gap): Clip[] {
   const len = gap.to - gap.from;
   const eps = 1e-6;
-  const out = clips.map((c) => ({ ...c }));
-  const moving = out.filter((c) => c.at >= gap.to - eps);
-  const still = out.filter((c) => c.at < gap.to - eps);
-  moving.sort((a, b) => Math.abs(a.track) - Math.abs(b.track) || a.at - b.at);
-  const placed: Clip[] = [...still];
-  // no rounding: a rounded start can land a hair inside the strip before the gap and bounce this one to the next lane
-  for (const c of moving) c.at = Math.abs(c.at - len - gap.from) < 1e-3 ? gap.from : Math.max(0, c.at - len);
-  // pass 1: clips that fit on their own lane stay there, so a hop never takes a lane a later clip needs
-  const hop: Clip[] = [];
-  for (const c of moving) {
-    const clash = still.some((o) => o.track === c.track && c.at < clipEnd(o) - eps && o.at < clipEnd(c) - eps);
-    if (clash) hop.push(c);
-    else placed.push(c);
-  }
-  // pass 2: a clashing clip goes to the next lane out, and whatever it lands on is pushed out the same way
-  let res = out;
-  for (const c of hop) res = resolveOverlaps(res, [c.id]);
-  return res;
+  const everywhere = !clips.some((c) => c.at < gap.to - eps && clipEnd(c) > gap.from + eps);
+  return clips.map((c) => {
+    if (c.at < gap.to - eps || (!everywhere && c.track !== gap.track)) return { ...c };
+    // no rounding: a rounded start can land a hair inside the strip before the gap
+    return { ...c, at: Math.abs(c.at - len - gap.from) < 1e-3 ? gap.from : Math.max(0, c.at - len) };
+  });
 }
 
 /**

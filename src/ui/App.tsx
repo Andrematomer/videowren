@@ -14,6 +14,8 @@ import { Preview } from './Preview.tsx';
 import { Drawer, TabBar } from './Drawer.tsx';
 import { SettingsSheet } from './SettingsSheet.tsx';
 import { saveFrame } from '../frame.ts';
+import { aim } from '../dropAim.ts';
+import { isAudioFile } from '../media.ts';
 import { Timeline } from './Timeline.tsx';
 import { browserInfo, checkSupport } from '../support.ts';
 
@@ -81,6 +83,7 @@ export function App() {
     let pos = { x: 0, y: 0 };
     let edge: { side: string; since: number } | null = null;
     let timer = 0;
+    let kindsOf: boolean[] = [];
     const where = () => {
       const els = document.elementsFromPoint(pos.x, pos.y);
       return { lane: els.find((x) => x.classList.contains('tl-lane')) ?? null, stage: els.find((x) => x.classList.contains('stage')) ?? null };
@@ -97,9 +100,11 @@ export function App() {
         clear();
         lit = w.lane;
         stage = w.lane ? null : w.stage;
-        lit?.classList.add('target');
         stage?.classList.add('drop-on');
       }
+      // the yellow outlines in the timeline show where the files would land (nothing is lit up any more)
+      const kinds = kindsOf.length ? kindsOf : [false];
+      window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: w.lane ? { x: pos.x, y: pos.y, kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y, kinds, mode: 'stage' } : null }));
       // held on the highest or lowest lane: a new lane opens now and then
       const lanes = [...document.querySelectorAll('.tl-lane')];
       const side = lit && lit === lanes[0] ? 'top' : lit && lit === lanes[lanes.length - 1] ? 'bottom' : '';
@@ -116,12 +121,14 @@ export function App() {
       timer = 0;
       edge = null;
       clear();
+      window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: null }));
       window.dispatchEvent(new CustomEvent('pc-lanes', { detail: 'reset' }));
     };
     const over = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       pos = { x: e.clientX, y: e.clientY };
+      kindsOf = [...(e.dataTransfer?.items ?? [])].filter((it) => it.kind === 'file').map((it) => it.type.startsWith('audio/'));
       update();
       if (!timer) timer = window.setInterval(update, 150); // a drag that stands still sends no events
     };
@@ -134,10 +141,14 @@ export function App() {
       pos = { x: e.clientX, y: e.clientY };
       const files = [...(e.dataTransfer?.files ?? [])];
       const w = where();
+      const target = aim.value ? { ...aim.value } : null;
+      // the outlines stay until the files are read and their strips appear
+      const done = () => window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: null }));
       stop();
-      const track = w.lane ? Number((w.lane as HTMLElement).dataset.track) : NaN;
-      if (Number.isFinite(track)) void importFiles(files, 'end', { track });
-      else if (w.stage) void importFiles(files, 'playhead', { stack: true });
+      if (w.lane && target) {
+        window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: { x: pos.x, y: pos.y, kinds: files.map((f) => isAudioFile(f)), mode: 'lane' } }));
+        void importFiles(files, 'time', { track: target.track, at: target.at }).finally(done);
+      } else if (w.stage) void importFiles(files, 'playhead');
       else void importFiles(files);
     };
     window.addEventListener('dragenter', over);
@@ -167,6 +178,8 @@ export function App() {
     const tap = (e: MouseEvent) => {
       const el = e.target as Element | null;
       if (!el || !el.closest) return;
+      // the tapped control may have been redrawn (a new icon) before this listener ran: it was a control, not empty space
+      if (!el.isConnected) return;
       if (el.closest('button, a, input, label, textarea, select, .strip-clip, .frame, .tl-scroll, .tl-bar, .tl-gap, .drawer, .tabbar, .toast, .add-menu')) return;
       deselect();
     };

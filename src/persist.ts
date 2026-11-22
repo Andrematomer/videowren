@@ -13,6 +13,8 @@ export interface SavedMedia {
   thumb: Blob | null;
   /** small preview copy of a video, if it was made */
   proxy?: Blob | null;
+  /** the long side the copy was made at */
+  proxyLong?: number;
 }
 
 function open(): Promise<IDBDatabase> {

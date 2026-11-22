@@ -145,6 +145,13 @@ export class PreviewEngine {
     }
   }
 
+  /** the picture on screen right now as a PNG (preview size): the fallback when the full-size picture can not be made */
+  snapshot(): Promise<Blob | null> {
+    const c = this.canvas;
+    if (!c) return Promise.resolve(null);
+    this.draw();
+    return new Promise((res) => c.toBlob((b) => res(b), 'image/png'));
+  }
   attach(canvas: HTMLCanvasElement | null): void {
     this.canvas = canvas;
     this.ctx = canvas ? canvas.getContext('2d', { alpha: false }) : null;

@@ -3158,3 +3158,43 @@ button.tl-time.tap {
 .app.slide .strip-clip:not(.lifted) {
   transition: left 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* the time capsule is exactly as tall as the ruler band around it */
+.tl-time {
+  top: 0;
+  height: 22px;
+  line-height: 22px;
+  border-radius: 11px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.strip-thumb.gray {
+  filter: grayscale(1) brightness(0.85);
+}
+.build-note {
+  position: absolute;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* files on their way in: a yellow outline where each one would land */
+.drop-ghost {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  background: rgba(240, 198, 74, 0.12);
+  pointer-events: none;
+  z-index: 3;
+}
+.tl-lane.target {
+  background: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}

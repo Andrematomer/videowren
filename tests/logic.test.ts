@@ -256,33 +256,30 @@ test('gapAt: finds the empty stretch between two clips of a lane, not on a clip 
   assert.deepEqual(gapAt([mk('c', 4, 1, 0)], 0, 1), { track: 0, from: 0, to: 4 });
 });
 
-test('removeGap: later clips move earlier on every lane, collisions hop to the next free lane', () => {
-  // lane 0 has a 3 s gap (2..5). Lane 1: x (2..6) straddles the gap and stays, y (6..9) would land on 3..6 on top of x
+test('removeGap: only the lane of the gap closes while another lane has something in that time span', () => {
+  // lane 0 has a 3 s gap (2..5). Lane 1: x (2..6) straddles the gap, y (6..9) stays where it is
   const cs = [mk('a', 0, 2, 0), mk('b', 5, 2, 0), mk('x', 2, 4, 1), mk('y', 6, 3, 1)];
   const out = removeGap(cs, { track: 0, from: 2, to: 5 });
   const by = (id: string) => out.find((c) => c.id === id)!;
   assert.equal(by('b').at, 2);
   assert.equal(by('b').track, 0);
-  assert.equal(by('y').at, 3);
-  assert.equal(by('y').track, 2);
+  assert.equal(by('y').at, 6);
+  assert.equal(by('y').track, 1);
   assert.equal(by('x').at, 2);
-  assert.equal(by('x').track, 1);
-  // sound lanes hop downwards
+  // sound lanes too
   const au = [mk('v', 3, 1, 0), mk('p', 1, 4, -1), mk('q', 5, 1, -1)];
   const o2 = removeGap(au, { track: 0, from: 0, to: 3 });
-  assert.equal(o2.find((c) => c.id === 'q')!.at, 2);
-  assert.equal(o2.find((c) => c.id === 'q')!.track, -2);
-  assert.equal(o2.find((c) => c.id === 'p')!.at, 1);
+  assert.equal(o2.find((c) => c.id === 'v')!.at, 0);
+  assert.equal(o2.find((c) => c.id === 'q')!.at, 5);
 });
 
-test('removeGap: a later clip that fits its own lane is not pushed away by an earlier hop', () => {
-  // y (6..9) must hop to lane 2 (x blocks lane 1 at 3..6), but z (9..12) fits lane 1 after the move and must stay there
-  const cs = [mk('a', 0, 2, 0), mk('b', 5, 2, 0), mk('x', 2, 4, 1), mk('y', 6, 3, 1), mk('z', 9, 3, 1)];
+test('removeGap: a gap that is empty on every lane closes everywhere', () => {
+  const cs = [mk('a', 0, 2, 0), mk('b', 5, 2, 0), mk('x', 0, 1, 1), mk('y', 6, 3, 1)];
   const out = removeGap(cs, { track: 0, from: 2, to: 5 });
   const by = (id: string) => out.find((c) => c.id === id)!;
-  assert.equal(by('y').track, 2);
-  assert.equal(by('z').track, 1);
-  assert.equal(by('z').at, 6);
+  assert.equal(by('b').at, 2);
+  assert.equal(by('y').at, 3);
+  assert.equal(by('x').at, 0);
 });
 
 test('clampView: up to 90% of the picture may leave the frame', () => {

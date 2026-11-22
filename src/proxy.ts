@@ -1,5 +1,5 @@
 import { ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input, Mp4OutputFormat, Output, Quality, canEncodeAudio, getFirstEncodableVideoCodec } from 'mediabunny';
-import { clearProxy, mediaEntry, setProxy } from './media.ts';
+import { mediaEntry, setProxy } from './media.ts';
 import { saveMedia } from './persist.ts';
 import { awakeForJob } from './wake.ts';
 import type { MediaInfo } from './types.ts';
@@ -46,23 +46,6 @@ export function queueProxy(id: string, info: MediaInfo, long: number): void {
   void drain();
 }
 
-/** The preview size was changed: drop the old copies and make them again. */
-export function requeueAllProxies(media: Record<string, MediaInfo>, long = loadLong()): void {
-  generation++;
-  for (const q of queue.splice(0)) progress(q.id, null);
-  for (const [id, info] of Object.entries(media)) {
-    if (clearProxy(id)) queueProxy(id, info, long);
-  }
-  changed();
-}
-const loadLong = (): number => {
-  try {
-    return (JSON.parse(localStorage.getItem('pocket-cut-nla:app-settings') ?? '{}') as { previewLong?: number }).previewLong ?? 240;
-  } catch {
-    return 240;
-  }
-};
-
 async function drain(): Promise<void> {
   if (running) return;
   running = true;
@@ -90,7 +73,7 @@ async function drain(): Promise<void> {
         const blob = await makeProxy(e.blob, job.info, job.long, () => !mediaEntry(job.id) || gen !== generation, (p) => progress(job.id, p));
         if (!blob) console.info('preview copy skipped (no suitable encoder)');
         if (blob && gen === generation && setProxy(job.id, blob)) {
-          void saveMedia(job.id, { blob: e.blob, name: e.name, thumb: e.thumb, proxy: blob });
+          void saveMedia(job.id, { blob: e.blob, name: e.name, thumb: e.thumb, proxy: blob, proxyLong: job.long });
           changed();
         }
       } catch (err) {
