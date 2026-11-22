@@ -1,3 +1,4 @@
+import { ALL_FORMATS, BlobSource, CanvasSink, Input } from 'mediabunny';
 import { bakedAudio, keyOf } from './bake.ts';
 import { drawLayer } from './layers.ts';
 import { activeAt, clipEnd, sourceAt, totalOf } from './timeline.ts';
@@ -12,6 +13,10 @@ export interface PreviewDeps {
   isBuilding(mediaId: string): boolean;
   /** a grey picture of the first frame (shown in place of a video that is being prepared) */
   getGray(mediaId: string): CanvasImageSource | undefined;
+  /** the full-size picture of a photo (the preview normally draws a smaller copy) */
+  getFullImage(mediaId: string): ImageBitmap | undefined;
+  /** true when a video is shown from its small preview copy */
+  hasProxy(mediaId: string): boolean;
   /** the original file (its sound is what gets baked for the preview) */
   getBlob(mediaId: string): Blob | undefined;
   onTime(t: number): void;
@@ -72,6 +77,62 @@ export class PreviewEngine {
   cropLive: { index: number; crop: Crop } | null = null;
   /** while cutting, the whole uncropped picture is drawn faintly behind the cut one */
   ghost = false;
+  /**
+   * Paused and still for a moment: photos and videos are drawn from their full-size originals instead of the small preview
+   * copies (playing and moving a picture keep using the small ones). A video needs one frame decoded from the original,
+   * which takes a fraction of a second after the position stops moving.
+   */
+  private fullOk = false;
+  private fullTimer = 0;
+  private fullGen = 0;
+  private full = new Map<string, { media: string; t: number; c: CanvasImageSource & { width: number; height: number } }>();
+  private unsettle(): void {
+    this.fullOk = false;
+    this.fullGen++;
+    clearTimeout(this.fullTimer);
+    if (!this.playing) this.fullTimer = window.setTimeout(() => this.settle(), 350);
+  }
+  private settle(): void {
+    this.fullTimer = 0;
+    if (this.playing) return;
+    this.fullOk = true;
+    this.draw();
+    const gen = this.fullGen;
+    const p = this.deps.getProject();
+    const here = new Set(activeAt(p.clips, this.tl).map((i) => p.clips[i]!.id));
+    for (const id of [...this.full.keys()]) if (!here.has(id)) this.full.delete(id); // a full-size frame is big: only the ones on screen are kept
+    for (const i of activeAt(p.clips, this.tl)) {
+      const clip = p.clips[i]!;
+      const media = p.media[clip.mediaId];
+      if (!media || media.kind === 'image' || media.kind === 'audio' || !this.deps.hasProxy(clip.mediaId) || this.deps.isBuilding(clip.mediaId)) continue;
+      const t = sourceAt(clip, this.tl);
+      const have = this.full.get(clip.id);
+      if (have && have.media === clip.mediaId && Math.abs(have.t - t) < 0.03) continue;
+      const blob = this.deps.getBlob(clip.mediaId);
+      if (!blob) continue;
+      void this.fullFrame(blob, media.width, media.height, t).then((c) => {
+        if (!c || gen !== this.fullGen || this.playing) return;
+        this.full.set(clip.id, { media: clip.mediaId, t, c });
+        this.draw();
+      });
+    }
+  }
+  /** one frame of the original file at source time t, at most 1920 px on the long side */
+  private async fullFrame(blob: Blob, w: number, h: number, t: number): Promise<(CanvasImageSource & { width: number; height: number }) | null> {
+    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    try {
+      const vt = await input.getPrimaryVideoTrack();
+      if (!vt) return null;
+      const k = Math.min(1, 1920 / Math.max(w, h));
+      const sink = new CanvasSink(vt, { width: Math.max(2, Math.round(w * k)), height: Math.max(2, Math.round(h * k)), fit: 'fill' });
+      const f = await sink.getCanvas(t);
+      return (f?.canvas as (CanvasImageSource & { width: number; height: number }) | undefined) ?? null;
+    } catch {
+      return null;
+    } finally {
+      (input as unknown as { dispose?: () => void }).dispose?.();
+    }
+  }
   /** where the position marker was when play was pressed (for the "return" end mode) */
   private playFrom = 0;
 
@@ -202,6 +263,7 @@ export class PreviewEngine {
     const canvas = this.canvas;
     if (!ctx || !canvas) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (!this.fullOk && !this.playing && !this.fullTimer) this.unsettle();
     const p = this.deps.getProject();
     ctx.fillStyle = p.settings.background || '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -222,10 +284,16 @@ export class PreviewEngine {
         if (g) drawLayer(ctx, g, media.width, media.height, { opacity: look.opacity, crop: look.crop }, { ...o, srcW: g.width, srcH: g.height });
         continue;
       }
-      const img = this.deps.getImage(clip.mediaId);
+      const still = this.fullOk && !this.playing && !this.live && !this.liveMany && !this.cropLive;
+      const img = (still && media.kind === 'image' ? this.deps.getFullImage(clip.mediaId) : undefined) ?? this.deps.getImage(clip.mediaId);
       if (img) {
         if (faint) drawLayer(ctx, img, img.width, img.height, faint, o);
         drawLayer(ctx, img, img.width, img.height, look, o);
+        continue;
+      }
+      const hi = still ? this.full.get(clip.id) : undefined;
+      if (hi && hi.media === clip.mediaId && Math.abs(hi.t - sourceAt(clip, this.tl)) < 0.03) {
+        drawLayer(ctx, hi.c, hi.c.width, hi.c.height, look, o);
         continue;
       }
       const pl = this.players.find((x) => x.clipId === clip.id);
@@ -437,6 +505,7 @@ export class PreviewEngine {
     this.token++;
     cancelAnimationFrame(this.raf);
     this.stopPlaying();
+    this.unsettle();
   }
 
   /** Pause and show the frame at timeline time t. */
@@ -444,6 +513,7 @@ export class PreviewEngine {
     const tok = ++this.token;
     cancelAnimationFrame(this.raf);
     this.stopPlaying();
+    this.unsettle();
     this.scrub = null;
     const clips = this.deps.getProject().clips;
     this.tl = Math.max(0, Math.min(t, totalOf(clips)));
@@ -462,6 +532,10 @@ export class PreviewEngine {
   }
 
   async play(): Promise<void> {
+    this.fullOk = false;
+    this.fullGen++;
+    clearTimeout(this.fullTimer);
+    this.full.clear();
     this.wakeAudio();
     const clips = this.deps.getProject().clips;
     if (clips.length === 0) return;

@@ -3167,19 +3167,17 @@ button.tl-time.tap {
   padding: 0 8px;
   font-size: 12px;
 }
-.strip-thumb.gray {
-  filter: grayscale(1) brightness(0.85);
+.strip-clip.generating .strip-thumb {
+  filter: grayscale(1) brightness(0.6);
 }
 .build-note {
   position: absolute;
   z-index: 6;
-  transform: translate(-50%, -50%);
-  padding: 4px 10px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.6);
   color: #fff;
-  font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  text-shadow: 0 0 0.25em rgba(0, 0, 0, 0.8), 0 0 0.1em rgba(0, 0, 0, 0.9);
   white-space: nowrap;
   pointer-events: none;
 }

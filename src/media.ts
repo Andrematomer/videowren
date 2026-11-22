@@ -70,27 +70,38 @@ export function clearProxy(id: string): boolean {
   return true;
 }
 export const mediaEntry = (id: string): Entry | undefined => entries.get(id);
-/** the first frame in colour and in grey, made once and remembered */
-const frames = new Map<string, { gray: HTMLCanvasElement; color: HTMLCanvasElement; wipe: HTMLCanvasElement; pct: number } | 'wait'>();
+/** the first frame in grey, made once and remembered, with the canvas the skeleton is drawn on */
+const frames = new Map<string, { gray: HTMLCanvasElement; skeleton: HTMLCanvasElement } | 'wait'>();
+const WAVE_MS = 1700;
 /**
- * The picture shown in place of a video while its preview copy is made: a vertical wipe of the first frame, grey on the
- * top part and colour on the bottom part, the colour part growing from the bottom as the work gets done (p from 0 to 1).
+ * The picture shown in place of a video while its preview copy is made: its first frame in grey and dimmed, with a wave of
+ * light that grows from the middle outwards like a ring and starts again (a loading skeleton). `now` is the time in ms.
  */
-export function mediaWipe(id: string, p: number, ready: () => void): HTMLCanvasElement | undefined {
+export function mediaSkeleton(id: string, now: number, ready: () => void): HTMLCanvasElement | undefined {
   const f = frames.get(id);
   if (f === 'wait') return undefined;
   if (f) {
-    const pct = Math.round(Math.min(1, Math.max(0, p)) * 100);
-    if (pct !== f.pct) {
-      f.pct = pct;
-      const w = f.wipe.width;
-      const h = f.wipe.height;
-      const x = f.wipe.getContext('2d')!;
-      x.drawImage(f.gray, 0, 0);
-      const cut = Math.round(h * (1 - pct / 100));
-      if (h - cut > 0) x.drawImage(f.color, 0, cut, w, h - cut, 0, cut, w, h - cut);
-    }
-    return f.wipe;
+    const c = f.skeleton;
+    const x = c.getContext('2d')!;
+    const w = c.width;
+    const h = c.height;
+    x.globalCompositeOperation = 'source-over';
+    x.drawImage(f.gray, 0, 0);
+    x.fillStyle = 'rgba(0,0,0,0.3)'; // dimmed
+    x.fillRect(0, 0, w, h);
+    const reach = Math.hypot(w, h) / 2;
+    const ph = (now % WAVE_MS) / WAVE_MS;
+    const r = ph * (reach + reach * 0.5);
+    const band = reach * 0.45;
+    const g = x.createRadialGradient(w / 2, h / 2, Math.max(0, r - band), w / 2, h / 2, r + band);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.5, `rgba(255,255,255,${0.32 * (1 - ph * 0.6)})`);
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    x.globalCompositeOperation = 'lighter';
+    x.fillStyle = g;
+    x.fillRect(0, 0, w, h);
+    x.globalCompositeOperation = 'source-over';
+    return c;
   }
   const e = entries.get(id);
   if (!e?.thumb) return undefined;
@@ -103,17 +114,15 @@ export function mediaWipe(id: string, p: number, ready: () => void): HTMLCanvasE
         c.height = bm.height;
         return c;
       };
-      const color = make();
-      color.getContext('2d')!.drawImage(bm, 0, 0);
       const gray = make();
       const x = gray.getContext('2d')!;
       x.drawImage(bm, 0, 0);
       x.globalCompositeOperation = 'saturation'; // a grey on top takes all the colour out and keeps the light
       x.fillStyle = '#808080';
       x.fillRect(0, 0, gray.width, gray.height);
-      const wipe = make();
+      const skeleton = make();
       bm.close();
-      if (entries.get(id) === e) frames.set(id, { gray, color, wipe, pct: -1 });
+      if (entries.get(id) === e) frames.set(id, { gray, skeleton });
       else frames.delete(id);
     })
     .then(() => frames.has(id) && ready())

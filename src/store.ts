@@ -7,7 +7,7 @@ import { setAwakeMode } from './wake.ts';
 import { computePeaks } from './wave.ts';
 import { onProxyProgress, onProxyWork, queueProxy, setProxyOrder } from './proxy.ts';
 import { clearSaved, loadSaved, requestPersistence, saveMedia, saveProject } from './persist.ts';
-import { activeAt, clipDuration, clipEnd, endOfTrack, overwriteOverlaps, freeTrack, laneRemovable, optimizeLanes, removeLane as removeLaneFrom, resolveOverlaps, settleAt, MAX_SPEED, MIN_CLIP, MIN_SPEED, removeGap as removeGapFrom, totalOf, type Gap } from './timeline.ts';
+import { activeAt, clipDuration, clipEnd, endOfTrack, overwriteOverlaps, freeTrack, laneRemovable, optimizeLanes, removeLane as removeLaneFrom, resolveOverlaps, settleAt, MAX_SPEED, MIN_CLIP, MIN_SPEED, removeGap as removeGapFrom, stackTracks, totalOf, type Gap } from './timeline.ts';
 import { DEFAULT_SETTINGS, emptyProject, type Clip, type ExportSettings, type MediaInfo, type Project, type View } from './types.ts';
 
 export type Tool = 'speed' | 'sound' | 'look' | 'effects' | 'clip' | 'text' | 'color' | 'font' | 'outline';
@@ -82,7 +82,7 @@ export interface AppPrefs {
   haptics: boolean;
 }
 
-export const DEFAULT_PREFS: AppPrefs = { imageSeconds: 5, previewLong: 144, photoLong: 360, awake: 'work', onEnd: 'pause', rowScale: 1, rowAuto: true, haptics: true };
+export const DEFAULT_PREFS: AppPrefs = { imageSeconds: 5, previewLong: 240, photoLong: 360, awake: 'work', onEnd: 'pause', rowScale: 1, rowAuto: true, haptics: true };
 
 function loadAppPrefs(): AppPrefs {
   try {
@@ -679,9 +679,8 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
         at = replaced.at;
         track = replaced.track;
       } else if (mode === 'playhead') {
-        // as layers: every file starts at the yellow line, each on the first free lane
+        // as layers: every file starts at the yellow line, each on its own lane; the lanes are settled for the whole group afterwards
         at = Math.round(state.playhead * 100) / 100;
-        track = freeTrack([...state.project.clips, ...added], at, end, base);
       } else if (mode === 'time') {
         // on current time: one file after another from the yellow line; the lane is settled for the whole group afterwards
         at = Math.round(cursor * 100) / 100;
@@ -707,6 +706,14 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
   set({ busy: null });
   if (failed) toast(failed > 1 ? `${failed} files could not be opened. ${lastError}` : lastError);
   if (added.length === 0) return;
+  if (mode === 'playhead') {
+    // as layers: the files are a group in a block of lanes side by side. Where something is in the way the whole block moves out
+    for (const [group, base] of [[added.filter((c) => media[c.mediaId]!.kind !== 'audio'), 0], [added.filter((c) => media[c.mediaId]!.kind === 'audio'), -1]] as const) {
+      if (group.length === 0) continue;
+      const tr = stackTracks(state.project.clips, group.map((c) => ({ at: c.at, dur: clipDuration(c) })), base);
+      group.forEach((c, k) => (c.track = tr[k]!));
+    }
+  }
   if (mode === 'time') {
     // the group moves as one: the first lane where none of its strips collides with something already there
     const clash = (t: number, group: Clip[]) => group.some((g) => state.project.clips.some((o) => o.track === t && g.at < clipEnd(o) - 1e-6 && o.at < clipEnd(g) - 1e-6));
@@ -728,7 +735,9 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
     // a new project starts with the canvas shape that suits its first picture
     settings: first ? { ...p.settings, aspect: nearestAspect(first.width, first.height) } : p.settings,
   }));
-  selectClip(firstNew);
+  // several files in one go are picked together, so they can be moved or changed as one
+  if (added.length > 1 && !replaced) setMulti(added.map((c) => c.id));
+  else selectClip(firstNew);
   added.forEach((c) => ensureWave(c.mediaId));
   void requestPersistence();
 }
@@ -794,6 +803,7 @@ export async function restore(): Promise<void> {
       settings.aspect = m ? nearestAspect(m.width, m.height) : '9:16';
     } else settings.aspect = saved.project.settings.aspect;
     clearHistory();
+    hadClips = clips.length > 0;
     set({ project: { ...saved.project, clips, settings }, selected: -1, multi: [], ready: true });
     for (const id of Object.keys(saved.project.media)) ensureWave(id);
   } else {
@@ -810,6 +820,7 @@ export async function discardProject(): Promise<void> {
 }
 
 let saveTimer = 0;
+let hadClips = false;
 let lastSaved: Project | null = null;
 subs.add(() => {
   if (!state.ready || state.project === lastSaved) return;
@@ -817,8 +828,13 @@ subs.add(() => {
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     lastSaved = p;
-    if (p.clips.length === 0) void clearSaved();
-    else void saveProject(p, mediaInHistory());
+    // an empty project only wipes the saved one when this run had a project to empty: a failed read at the start must never delete what is stored
+    if (p.clips.length === 0) {
+      if (hadClips) void clearSaved();
+    } else {
+      hadClips = true;
+      void saveProject(p, mediaInHistory());
+    }
   }, 600);
 });
 

@@ -207,6 +207,18 @@ export function freeTrack(others: Clip[], at: number, dur: number, track: number
 }
 
 /**
+ * Lanes for files that are stacked as layers, one per lane, side by side in a block (a group): the first block of
+ * lanes counting out from `base` (up when base >= 0, down below it) where every file finds its lane free.
+ */
+export function stackTracks(others: Clip[], items: { at: number; dur: number }[], base: number): number[] {
+  const dir = base >= 0 ? 1 : -1;
+  const fits = (start: number) => items.every((it, k) => !others.some((o) => o.track === start + dir * k && it.at < clipEnd(o) - 1e-6 && o.at < it.at + it.dur - 1e-6));
+  let s = base;
+  for (let i = 0; i < 400 && !fits(s); i++) s += dir;
+  return items.map((_, k) => s + dir * k);
+}
+
+/**
  * A strip dropped within a hair of a neighbour's edge (the finger lands between two frames, or the
  * rounding to hundredths leaves a sliver) sits flush against it instead of overlapping by a sliver.
  * Returns the exact start, or null when nothing is that close.

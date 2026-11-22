@@ -110,7 +110,7 @@ export function Preview() {
  * strip on the canvas (it sits where the picture is); the picture itself shows as a first frame that turns from grey to colour, bottom up.
  */
 function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
-  // one string, so the box only redraws when a pie moves or fills a little more
+  // one string, so the box only redraws when the note moves, turns, resizes or the percentage changes
   const key = useStore((s) => {
     const out: string[] = [];
     for (const i of activeAt(s.project.clips, s.playhead)) {
@@ -121,7 +121,10 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
       const q = quadOf(c, m, W, H);
       const x = q.reduce((a, b) => a + b.x, 0) / q.length;
       const y = q.reduce((a, b) => a + b.y, 0) / q.length;
-      out.push(`${c.id},${Math.round(x)},${Math.round(y)}`);
+      const w = Math.hypot(q[1]!.x - q[0]!.x, q[1]!.y - q[0]!.y);
+      const h = Math.hypot(q[3]!.x - q[0]!.x, q[3]!.y - q[0]!.y);
+      const rot = (Math.atan2(q[1]!.y - q[0]!.y, q[1]!.x - q[0]!.x) * 180) / Math.PI;
+      out.push(`${c.id},${Math.round(x)},${Math.round(y)},${Math.round(w)},${Math.round(h)},${Math.round(rot * 10) / 10},${Math.round(p * 100)}`);
     }
     return out.join(';');
   });
@@ -129,10 +132,17 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   return (
     <>
       {key.split(';').map((k) => {
-        const [id, x, y] = k.split(',');
+        const [id, x, y, w, h, rot, p] = k.split(',');
+        // the note belongs to the picture: it is as big as the picture is, and turns with it
+        const fs = Math.min(Number(w) * 0.12, Number(h) * 0.16);
+        if (fs < 5) return null;
         return (
-          <span key={id} class="build-note" style={{ left: `${x}px`, top: `${y}px` }}>
-            Generating preview
+          <span key={id} class="build-note" style={{ left: `${x}px`, top: `${y}px`, fontSize: `${fs}px`, transform: `translate(-50%, -50%) rotate(${rot}deg)` }}>
+            generating
+            <br />
+            preview
+            <br />
+            {p}%
           </span>
         );
       })}

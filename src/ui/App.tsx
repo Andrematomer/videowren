@@ -120,6 +120,7 @@ export function App() {
       clearInterval(timer);
       timer = 0;
       edge = null;
+      kindsOf = [];
       clear();
       window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: null }));
       window.dispatchEvent(new CustomEvent('pc-lanes', { detail: 'reset' }));
@@ -128,7 +129,10 @@ export function App() {
       if (!hasFiles(e)) return;
       e.preventDefault();
       pos = { x: e.clientX, y: e.clientY };
-      kindsOf = [...(e.dataTransfer?.items ?? [])].filter((it) => it.kind === 'file').map((it) => it.type.startsWith('audio/'));
+      // one entry per dragged item (some browsers report the kind of an item as something else than 'file' while it is still in the air)
+      const it = e.dataTransfer?.items;
+      const n = Math.max(it?.length ?? 0, kindsOf.length);
+      kindsOf = Array.from({ length: n }, (_, i) => !!it?.[i]?.type?.startsWith('audio/'));
       update();
       if (!timer) timer = window.setInterval(update, 150); // a drag that stands still sends no events
     };

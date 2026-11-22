@@ -80,13 +80,34 @@ export async function loadSaved(): Promise<{ project: Project; media: Map<string
       db.close();
       return null;
     }
-    const store = db.transaction('media').objectStore('media');
+    const keys = await wrap(db.transaction('media').objectStore('media').getAllKeys());
     const media = new Map<string, SavedMedia>();
-    for (const key of await wrap(store.getAllKeys())) media.set(String(key), (await wrap(store.get(key))) as SavedMedia);
+    // one read for each file, each in a transaction of its own: a file that can not be read loses only itself, not the whole project
+    for (const key of keys) {
+      try {
+        const m = (await wrap(db.transaction('media').objectStore('media').get(key))) as SavedMedia | undefined;
+        if (m?.blob) media.set(String(key), m);
+      } catch (e) {
+        console.warn('a stored file could not be read', e);
+      }
+    }
     db.close();
     return { project, media };
-  } catch {
+  } catch (e) {
+    console.warn('the saved project could not be read', e);
     return null;
+  }
+}
+
+/** true when something is saved (used to tell "nothing saved" from "saved but could not be read") */
+export async function hasSaved(): Promise<boolean> {
+  try {
+    const db = await open();
+    const n = await wrap(db.transaction('kv').objectStore('kv').count());
+    db.close();
+    return n > 0;
+  } catch {
+    return false;
   }
 }
 

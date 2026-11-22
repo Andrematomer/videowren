@@ -5,7 +5,7 @@ import { thumbUrl } from '../media.ts';
 import { hold, release as releaseHud, say } from '../hud.ts';
 import { optimizeWithFeedback, pasteClipboard, addSolid, addTextClip, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
 import { PEAKS_PER_SEC } from '../wave.ts';
-import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, freeTrack, gapAt, laneRemovable, totalOf } from '../timeline.ts';
+import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, stackTracks, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
 import { PickLabel } from './Picker.tsx';
 import { aim } from '../dropAim.ts';
@@ -21,7 +21,7 @@ const ROW0 = 38;
 const GAP = 4;
 const RULER = 22;
 const SNAP_PX = 8;
-const MIN_PPS = 6;
+const MIN_PPS = 0.5; // about ten minutes across a phone screen
 const MAX_PPS = 300;
 
 interface Move {
@@ -156,7 +156,11 @@ export function Timeline() {
         // over the preview: every file starts at the yellow line on its own layer (open lanes are added as needed)
         aim.value = null;
         const placed: Clip[] = [];
-        for (const audio of d.kinds) placed.push(pseudo(freeTrack([...L.clips, ...placed], L.playhead, D, audio ? -1 : 0), L.playhead));
+        for (const base of [0, -1]) {
+          const idx = d.kinds.map((a, i) => (a === (base === -1) ? i : -1)).filter((i) => i >= 0);
+          const tr = stackTracks(L.clips, idx.map(() => ({ at: L.playhead, dur: D })), base);
+          idx.forEach((_, k) => placed.push(pseudo(tr[k]!, L.playhead)));
+        }
         const top = Math.max(...placed.map((c) => c.track), lanesFor(L.clips)[0]!);
         const bottom = Math.min(...placed.map((c) => c.track), lanesFor(L.clips).at(-1)!);
         const baseTop = lanesFor(L.clips)[0]!;
@@ -501,6 +505,7 @@ export function Timeline() {
   };
   const boxDown = (e: PointerEvent) => {
     const el = scroller.current;
+    if (live.current.clips.length === 0) return; // nothing to pick in an empty project (the preview does the same)
     if (!el || !e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
     if ((e.target as Element).closest('.strip-clip, .trim-h, .gap-trash, .tl-ruler')) return;
     const p = toContent(e.clientX, e.clientY);
@@ -932,7 +937,7 @@ export function Timeline() {
   };
   const gapRow = gap ? lanes.indexOf(gap.track) : -1;
 
-  const step = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300].find((s) => s * pps >= 56) ?? 300;
+  const step = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200].find((s) => s * pps >= 56) ?? 1200;
   const ticks: number[] = [];
   for (let t = 0; padL + t * pps + 40 <= width; t += step) ticks.push(t);
 
@@ -1133,7 +1138,7 @@ export function Timeline() {
                   key={c.id}
                   role="option"
                   aria-selected={on}
-                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''} ${snapAt != null && Math.abs(c.at - snapAt) < 0.02 ? 'snap-l' : ''} ${snapAt != null && Math.abs(c.at + clipDuration(c) - snapAt) < 0.02 ? 'snap-r' : ''}`}
+                  class={`strip-clip ${on ? 'on' : ''} ${inMulti ? 'multi' : ''} ${moving ? 'lifted' : ''} ${audio ? 'audio' : ''} ${m?.text ? 'texty' : ''} ${m?.solid ? 'solid' : ''} ${baking !== undefined ? 'baking' : ''} ${p !== undefined ? 'generating' : ''} ${on && handles && multi.length === 0 ? 'edit' : ''} ${slippable(m) ? 'vid' : ''} ${snapAt != null && Math.abs(c.at - snapAt) < 0.02 ? 'snap-l' : ''} ${snapAt != null && Math.abs(c.at + clipDuration(c) - snapAt) < 0.02 ? 'snap-r' : ''}`}
                   style={{ left: `${padL + at * pps}px`, top: `${top}px`, width: `${w}px`, height: `${ROW}px`, ...(m?.solid ? { background: m.solid } : {}) }}
                   onPointerDown={down(i)}
                   onPointerMove={onMove}
@@ -1155,17 +1160,13 @@ export function Timeline() {
                     </span>
                   )}
                   {url && !m?.text && <span class="strip-thumb" style={{ backgroundImage: `url("${url}")`, backgroundPosition: `${-((tr?.at ?? c.at) - c.at) * pps + ((c.start - start) / c.speed) * pps}px center` }} />}
-                  {url && !m?.text && p !== undefined && (
-                    // a video being prepared for the preview: grey on top, colour below, the colour rising as the work gets done
-                    <span class="strip-thumb gray" style={{ backgroundImage: `url("${url}")`, backgroundPosition: `${-((tr?.at ?? c.at) - c.at) * pps + ((c.start - start) / c.speed) * pps}px center`, clipPath: `inset(0 0 ${Math.round(p * 100)}% 0)` }} />
-                  )}
                   {ROW >= 30 && (
                     <span class="strip-time num">
                       {c.speed !== 1 ? `${c.speed}× · ` : ''}
                       {fmtTime((end - start) / c.speed)}
                     </span>
                   )}
-                  <span class="strip-label num">{(m?.name ?? '') + (p !== undefined ? ' (generating preview)' : '')}</span>
+                  <span class="strip-label num">{(m?.name ?? '') + (p !== undefined ? ` (generating preview ${Math.round(p * 100)}%)` : '')}</span>
                   {on && handles && !moving && (
                     <>
                       <span class="trim-h left" onPointerDown={trimDown(i, 'left')} onPointerMove={trimMove} onPointerUp={trimUp} onPointerCancel={trimUp} onClick={(e) => e.stopPropagation()} />

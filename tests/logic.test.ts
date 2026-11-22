@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { IDENTITY_VIEW, baseScale, clampView, snapEightCropped, dragView, fillZoom, fitZoom, frameTransform, nearestAspect, snapEight, normAngle, outputSize, pinchView, quarterTurned, snapView } from '../src/geometry.ts';
 import { gradePixel } from '../src/layers.ts';
-import { overwriteOverlaps, clipEnd, activeAt, endOfTrack, freeTrack, gapAt, laneRemovable, optimizeLanes, removeGap, removeLane, resolveOverlaps, settleAt, planParts, sourceAt, totalOf } from '../src/timeline.ts';
+import { overwriteOverlaps, clipEnd, activeAt, endOfTrack, freeTrack, gapAt, laneRemovable, optimizeLanes, removeGap, removeLane, resolveOverlaps, settleAt, stackTracks, planParts, sourceAt, totalOf } from '../src/timeline.ts';
 import { resample, timeStretch } from '../src/stretch.ts';
 import { MAX_MBPS, MIN_MBPS, RATE_STOPS, autoBitrate, estimateBytes, fmtMbps, videoBitrate } from '../src/bitrate.ts';
 import { emptyProject, type Clip } from '../src/types.ts';
@@ -440,4 +440,13 @@ test('overwriteOverlaps: a dropped strip trims, splits or removes what is under 
   // covered completely: gone; other lanes untouched
   out = overwriteOverlaps([under, mk('o', 0, 10, 1), mk('m', -1, 12, 0)], ['m'], id);
   assert.deepEqual(out.map((c) => c.id).sort(), ['m', 'o']);
+});
+
+test('stackTracks: a group of layers takes a block of free lanes side by side', () => {
+  // lane 1 is busy: three files can not use 0,1,2 so the block moves out to 2,3,4
+  const busy = [mk('a', 0, 5, 1)];
+  const items = [0, 1, 2].map(() => ({ at: 1, dur: 2 }));
+  assert.deepEqual(stackTracks(busy, items, 0), [2, 3, 4]);
+  assert.deepEqual(stackTracks([], items, 0), [0, 1, 2]);
+  assert.deepEqual(stackTracks([mk('s', 0, 5, -2)], items, -1), [-3, -4, -5]);
 });
