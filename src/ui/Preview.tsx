@@ -123,14 +123,22 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   });
   // while a picture is moved, turned, scaled, cropped or sliding into place, the note goes with it, frame by frame
   const [, tick] = useState(0);
+  // paused, the real frame is shown in full colour as soon as it is ready, and then there is no note
+  const fullFlags = () => {
+    const st = getState();
+    return st.project.clips.map((c) => (!engine.playing && st.proxyProgress[c.mediaId] !== undefined && engine.hasFullFrame(c.id) ? 1 : 0)).join('');
+  };
+  const seen = useRef('');
   useEffect(() => {
     engine.onDraw = () => {
-      if (engine.live || engine.liveMany || engine.cropLive) tick((n) => n + 1);
+      const f = fullFlags();
+      if (engine.live || engine.liveMany || engine.cropLive || f !== seen.current) tick((n) => n + 1);
     };
     return () => {
       engine.onDraw = null;
     };
-  }, []);
+  });
+  seen.current = fullFlags();
   if (!key) return null;
   const st = getState();
   return (
@@ -141,6 +149,7 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
         const c = st.project.clips[i];
         const m = c && st.project.media[c.mediaId];
         if (!c || !m) return null;
+        if (!engine.playing && engine.hasFullFrame(c.id)) return null;
         const view = engine.liveMany?.get(i) ?? (engine.live && engine.live.index === i ? engine.live.view : c.view);
         const crop = engine.cropLive && engine.cropLive.index === i ? engine.cropLive.crop : c.crop;
         const q = quadOf({ ...c, view, crop }, m, W, H);
@@ -241,13 +250,16 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   const regionTick = useRef(snapTicker()).current;
   const gTick = useRef(snapTicker()).current;
   const lTick = useRef(snapTicker()).current;
-  const guides = (s: ReturnType<typeof snapView> | null) => {
+  /** `two`: two fingers are on the picture (only then can the zoom be snapping to fit or fill); `deg`: the angle while it is being turned */
+  const guides = (s: ReturnType<typeof snapView> | null, two = false, deg: number | null = null) => {
     gTick(s && (s.x || s.y || s.edges.l || s.edges.r || s.edges.t || s.edges.b || s.zoom || s.rot !== null) ? `${!!s.x}${!!s.y}${s.edges.l}${s.edges.r}${s.edges.t}${s.edges.b}${s.zoom}${s.rot}` : null);
     guideV.current?.classList.toggle('on', !!s?.x);
     guideH.current?.classList.toggle('on', !!s?.y);
     for (const k of ['l', 'r', 't', 'b'] as const) edgeEls.current[k]?.classList.toggle('on', !!s?.edges[k]);
     if (fine.current) return;
-    showBadge(s ? (s.zoom === 'fit' ? 'Fit' : s.zoom === 'fill' ? 'Fill' : s.rot !== null ? fmtDeg(s.rot) : '') : '');
+    if (!s) return showBadge('');
+    if (deg !== null) return showBadge(fmtDeg(deg)); // turning: the angle, every degree
+    showBadge(two && s.zoom === 'fit' ? 'Fit' : two && s.zoom === 'fill' ? 'Fill' : '');
   };
   /** extra snap lines (the edges and middles of other pictures), in canvas pixels from the top left */
   const lines = (x: number | null, y: number | null) => {
@@ -281,7 +293,10 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       guideV.current?.classList.remove('on');
       guideH.current?.classList.remove('on');
       showBadge('FINE');
-    } else showBadge('');
+    } else {
+      hudEndFine();
+      showBadge('');
+    }
   };
   const rebase = () => {
     const c = current();
@@ -700,7 +715,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       const q = Math.round(target / 45) * 45;
       if (Math.abs(target - q) < 4) (dr = ((q - r0) * Math.PI) / 180), (snapped = normAngle(q));
     }
-    if (!fine.current) showBadge(snapped !== null ? fmtDeg(snapped) : '');
+    if (!fine.current) showBadge(b.b && Math.abs(dr) > 0.0087 ? fmtDeg(normAngle(members[0]!.v.rot + (dr * 180) / Math.PI)) : snapped !== null ? fmtDeg(snapped) : '');
     const zs = members.map((m) => m.v.zoom);
     scale = Math.max(clampZoom(0) / Math.min(...zs), Math.min(scale, clampZoom(1e9) / Math.max(...zs)));
     const cos = Math.cos(dr);
@@ -812,7 +827,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       }
       live.current = nv;
       engine.live = { index: getState().selected, view: nv };
-      guides(sn);
+      guides(sn, !!b.b, b.b && Math.abs(normAngle(nv.rot - b.view.rot)) > 0.5 ? nv.rot : null);
       lines(lineX, lineY);
       // half / quarter snapping: the finger (not the picture) held at a side or corner of the canvas
       if (!b.b && raw1) {
@@ -1481,7 +1496,7 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
       const q = Math.round(rot / 45) * 45;
       const hit = Math.abs(rot - q) < 3;
       if (hit) rot = q; // a small magnet at every 45 degrees
-      if (!d.fine) turnBadge(d.frame, hit ? normAngle(q) : null);
+      if (!d.fine) turnBadge(d.frame, normAngle(rot));
       const dr = ((rot - v0.rot) * Math.PI) / 180;
       const vx = C0.x - Cc.x;
       const vy = C0.y - Cc.y;

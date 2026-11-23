@@ -205,7 +205,7 @@ export function Timeline() {
   const rowScale = rowAuto ? autoScale : prefRow;
   const ROW = Math.round(ROW0 * rowScale);
   const total = totalOf(clips);
-  const padL = Math.round(viewW / 3);
+  const padL = Math.round(viewW / 4); // the yellow line sits a quarter of the way in
   const extent = Math.max(total, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
   const width = extent * pps + viewW;
   const height = RULER + lanes.length * (ROW + GAP) + 6;
@@ -243,6 +243,36 @@ export function Timeline() {
     const want = playhead * pps;
     if (Math.abs(el.scrollLeft - want) > 1.5) el.scrollLeft = want;
   }, [playhead, pps, viewW, total]);
+
+  /** tapping a strip: the position slides to its start while the zoom changes so the strip fills the middle half (25% to 75%) of the width */
+  const glide = useRef(0);
+  const glideTo = (index: number) => {
+    const c = live.current.clips[index];
+    if (!c) return;
+    const t1 = c.at;
+    const p1 = Math.max(MIN_PPS, Math.min(MAX_PPS, (0.5 * viewW) / Math.max(0.05, clipDuration(c))));
+    const t0 = getState().playhead;
+    const p0 = live.current.pps;
+    const T = 300;
+    const start = performance.now();
+    cancelAnimationFrame(glide.current);
+    engine.holding = true;
+    const tick = () => {
+      const k = Math.min(1, (performance.now() - start) / T);
+      const e = 1 - Math.pow(1 - k, 3);
+      lastUser.current = 0;
+      setPps(p0 * Math.pow(p1 / p0, e)); // zoom in steps that feel even
+      const t = t0 + (t1 - t0) * e;
+      set({ playhead: t });
+      void engine.showAt(t);
+      if (k < 1) glide.current = requestAnimationFrame(tick);
+      else {
+        engine.holding = false;
+        void engine.showAt(t1);
+      }
+    };
+    glide.current = requestAnimationFrame(tick);
+  };
 
   // the person scrolled: the position follows (one preview refresh per frame at most)
   const seekFrame = useRef(0);
@@ -321,6 +351,8 @@ export function Timeline() {
     const dist = (e: TouchEvent) => Math.hypot(e.touches[0]!.clientX - e.touches[1]!.clientX, e.touches[0]!.clientY - e.touches[1]!.clientY);
     const start = (e: TouchEvent) => {
       touching.current = true;
+      engine.holding = true; // no full-size frame while a finger holds the position
+      cancelAnimationFrame(glide.current);
       clearTimeout(settle.current);
       trail = [];
       lock = e.touches.length === 1 && !(e.target as Element).closest('.trim-h') ? { x: e.touches[0]!.clientX, y: e.touches[0]!.clientY, pps0: live.current.pps, axis: null } : null;
@@ -366,6 +398,7 @@ export function Timeline() {
       if (e.touches.length === 0) {
         touching.current = false;
         armSettle();
+        engine.letGo();
       }
       if (lock?.axis === 'y') trail = [];
       if (lock?.axis === 'y' && e.touches.length === 0)
@@ -396,6 +429,7 @@ export function Timeline() {
       const onStrip = !!(e.target as Element).closest('.strip-clip');
       if ((e.pointerType !== 'mouse' && e.pointerType !== 'pen') || e.button !== 0 || (e.target as Element).closest('.trim-h') || (!onStrip && (e.target as Element).closest('button'))) return;
       touching.current = true;
+      engine.holding = true;
       clearTimeout(settle.current);
       pm = { id: e.pointerId, x: e.clientX, left: el.scrollLeft, y: e.clientY, pps0: live.current.pps, axis: null, onStrip };
     };
@@ -429,7 +463,7 @@ export function Timeline() {
       }
     };
     const mUp = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse' || e.pointerType === 'pen') (touching.current = false), armSettle();
+      if (e.pointerType === 'mouse' || e.pointerType === 'pen') (touching.current = false), armSettle(), engine.letGo();
       if (!pm || pm.id !== e.pointerId) return;
       const was = pm.axis;
       pm = null;
@@ -1150,7 +1184,7 @@ export function Timeline() {
                     engine.pause();
                     if (getState().multi.length > 0) toggleMulti(i);
                     else if (on) (say(getState().handles ? 'Select mode' : 'Edit mode'), set({ handles: !getState().handles }));
-                    else selectClip(i);
+                    else (selectClip(i, { keepPlayhead: true }), glideTo(i));
                   }}
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}

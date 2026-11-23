@@ -18,6 +18,7 @@ import { aim } from '../dropAim.ts';
 import { isAudioFile } from '../media.ts';
 import { Timeline } from './Timeline.tsx';
 import { browserInfo, checkSupport } from '../support.ts';
+import qrcode from 'qrcode-generator';
 
 const support = checkSupport();
 
@@ -84,8 +85,10 @@ export function App() {
     let edge: { side: string; since: number } | null = null;
     let timer = 0;
     let kindsOf: boolean[] = [];
+    // a finger covers what is right under it: on a touch screen the aim sits above the fingertip (a mouse has no such need)
+    const lift = () => (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 72 : 0);
     const where = () => {
-      const els = document.elementsFromPoint(pos.x, pos.y);
+      const els = document.elementsFromPoint(pos.x, pos.y - lift());
       return { lane: els.find((x) => x.classList.contains('tl-lane')) ?? null, stage: els.find((x) => x.classList.contains('stage')) ?? null };
     };
     const clear = () => {
@@ -104,7 +107,7 @@ export function App() {
       }
       // the yellow outlines in the timeline show where the files would land (nothing is lit up any more)
       const kinds = kindsOf.length ? kindsOf : [false];
-      window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: w.lane ? { x: pos.x, y: pos.y, kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y, kinds, mode: 'stage' } : null }));
+      window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: w.lane ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'stage' } : null }));
       // held on the highest or lowest lane: a new lane opens now and then
       const lanes = [...document.querySelectorAll('.tl-lane')];
       const side = lit && lit === lanes[0] ? 'top' : lit && lit === lanes[lanes.length - 1] ? 'bottom' : '';
@@ -150,7 +153,7 @@ export function App() {
       const done = () => window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: null }));
       stop();
       if (w.lane && target) {
-        window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: { x: pos.x, y: pos.y, kinds: files.map((f) => isAudioFile(f)), mode: 'lane' } }));
+        window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: { x: pos.x, y: pos.y - lift(), kinds: files.map((f) => isAudioFile(f)), mode: 'lane' } }));
         void importFiles(files, 'time', { track: target.track, at: target.at }).finally(done);
       } else if (w.stage) void importFiles(files, 'playhead');
       else void importFiles(files);
@@ -334,6 +337,7 @@ export function App() {
 function Empty({ onEnter }: { onEnter: () => void }) {
   const [bytes, setBytes] = useState<number | null>(null);
   const [steps, setSteps] = useState(false);
+  const [qr, setQr] = useState(false);
   const [, tick] = useState(0);
   useEffect(() => onInstallChange(() => tick((n) => n + 1)), []);
   useEffect(() => {
@@ -353,7 +357,13 @@ function Empty({ onEnter }: { onEnter: () => void }) {
       <h1>VideoWren</h1>
       <p class="slogan">A mobile video editor that fits in your pocket.</p>
       <p>Stack videos, pictures, text and sound on layers, then trim, crop, grade and time them on a real timeline. Small, offline and free. Everything happens on this device: no upload, no account, no watermark, and no trackers or analytics.</p>
+      {!isMobile && <p class="note-mobile">VideoWren is optimized for mobile devices. It works here, but it is made for a phone.</p>}
       <div class="welcome-buttons">
+        {!isMobile && (
+          <button class="cta" onClick={() => setQr(true)}>
+            Download on mobile device
+          </button>
+        )}
         <button class="cta" onClick={install}>
           Install app{size}
         </button>
@@ -362,7 +372,26 @@ function Empty({ onEnter }: { onEnter: () => void }) {
         </button>
       </div>
       {steps && <InstallSteps onClose={() => setSteps(false)} />}
+      {qr && <PhoneCode onClose={() => setQr(false)} />}
     </main>
+  );
+}
+
+/** There is no link that installs a web app by itself: the install is always done in the phone's own browser. So the code opens the site, and the phone offers (or is told how) to install it from there. */
+const SITE = 'https://videowren.web.app/';
+function PhoneCode({ onClose }: { onClose: () => void }) {
+  const q = qrcode(0, 'M');
+  q.addData(SITE);
+  q.make();
+  return (
+    <div class="install-steps phone-code" role="dialog" aria-modal="true" aria-label="Get VideoWren on a phone">
+      <h2>Get VideoWren on your phone</h2>
+      <div class="qr" role="img" aria-label={`QR code for ${SITE}`} dangerouslySetInnerHTML={{ __html: q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }) }} />
+      <p>Scan this with the camera of your phone. It opens {SITE.replace('https://', '').replace(/\/$/, '')}; there, tap Install app (Android), or Share, then Add to Home Screen (iPhone).</p>
+      <button class="cta" onClick={onClose}>
+        Close
+      </button>
+    </div>
   );
 }
 

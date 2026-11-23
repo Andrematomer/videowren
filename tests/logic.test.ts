@@ -374,9 +374,11 @@ test('optimizeLanes: fewest lanes, same order of every overlapping pair', () => 
   // strips spread over many lanes but never overlapping collapse into one lane
   const flat = optimizeLanes([mk('a', 3, 0), mk('b', -4, 3), mk('c', 7, 6)]);
   assert.equal(new Set(flat.clips.map((c) => c.track)).size, 1);
-  // three stacked strips over time keep their depth
-  const stack = optimizeLanes([mk('a', 1, 0), mk('b', 2, 0), mk('c', 3, 0)]);
-  assert.deepEqual(stack.clips.map((c) => c.track), [1, 2, 3]);
+  // the stack is centred on lane 0: three layers on 4, 5, 6 become -1, 0, 1; an even count leans positive
+  const stack = optimizeLanes([mk('a', 4, 0), mk('b', 5, 0), mk('c', 6, 0)]);
+  assert.deepEqual(stack.clips.map((c) => c.track), [-1, 0, 1]);
+  assert.deepEqual(optimizeLanes([mk('a', 4, 0), mk('b', 5, 0)]).clips.map((c) => c.track), [0, 1]);
+  assert.deepEqual(optimizeLanes([mk('a', 4, 0), mk('b', 5, 0), mk('c', 6, 0), mk('d', 7, 0)]).clips.map((c) => c.track), [-1, 0, 1, 2]);
 });
 
 test('removeGap: a gap that starts at an odd time never bounces the next strip to another lane', () => {

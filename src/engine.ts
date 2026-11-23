@@ -29,7 +29,7 @@ const skeletonTick = () => {
   skeletonLoop = 0;
   if (engine.playing) return;
   const st = getState();
-  const on = activeAt(st.project.clips, engine.tl).some((i) => st.proxyProgress[st.project.clips[i]!.mediaId] !== undefined && !['image', 'audio'].includes(st.project.media[st.project.clips[i]!.mediaId]?.kind ?? ''));
+  const on = activeAt(st.project.clips, engine.tl).some((i) => st.proxyProgress[st.project.clips[i]!.mediaId] !== undefined && !engine.hasFullFrame(st.project.clips[i]!.id) && !['image', 'audio'].includes(st.project.media[st.project.clips[i]!.mediaId]?.kind ?? ''));
   if (!on) return;
   engine.draw();
   skeletonLoop = requestAnimationFrame(skeletonTick);

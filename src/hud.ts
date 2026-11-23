@@ -30,7 +30,7 @@ function place(): void {
   const x = Math.min(window.innerWidth - w / 2 - 6, Math.max(w / 2 + 6, top.x));
   b.classList.add('follow');
   b.style.left = `${x}px`;
-  b.style.top = `${Math.max(8, top.y - 58)}px`;
+  b.style.top = `${Math.max(8, top.y - 78)}px`;
 }
 const queuePlace = () => {
   if (queued) return;

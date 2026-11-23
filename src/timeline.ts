@@ -263,7 +263,7 @@ export function removeLane(clips: Clip[], track: number): Clip[] {
  * Uses as few lanes as possible without changing what is drawn over what. Two strips that overlap in time keep their
  * order (the one that was higher stays higher); strips that never overlap may share a lane. Each strip goes to the
  * lowest lane its overlapping lower neighbours allow, which is the fewest lanes there can be. The whole stack is
- * then shifted to sit as near its old place as it can. Returns the new strips and how many changed lane.
+ * then centred on lane 0 (an even number of layers leans to the positive side). Returns the new strips and how many changed lane.
  */
 export function optimizeLanes(clips: Clip[]): { clips: Clip[]; moved: number } {
   if (clips.length === 0) return { clips, moved: 0 };
@@ -278,9 +278,9 @@ export function optimizeLanes(clips: Clip[]): { clips: Clip[]; moved: number } {
     }
     depth.set(c.id, d);
   });
-  // shift: the median of (old lane - new depth), so most strips stay where they were
-  const offs = clips.map((c) => c.track - depth.get(c.id)!).sort((a, b) => a - b);
-  const shift = offs[Math.floor(offs.length / 2)]!;
+  // the stack is centred on lane 0: three layers sit on -1, 0, 1; with an even count the extra layer goes on the positive side (-1..2)
+  const n = Math.max(...depth.values()) + 1;
+  const shift = -Math.floor((n - 1) / 2);
   let moved = 0;
   const out = clips.map((c) => {
     const track = depth.get(c.id)! + shift;

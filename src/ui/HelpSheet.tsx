@@ -37,7 +37,7 @@ export function HelpSheet({ onClose }: { onClose: () => void }) {
         <p>Pick quality and, if you want, split the video into parts of a fixed length. After exporting, use Share to send the files or save them to your gallery.</p>
       </Collapse>
       <Collapse title="About VideoWren" {...at("About VideoWren")}>
-        <p>VideoWren is a mobile video editor that fits in your pocket: small, offline and free. It is made for phones; on a computer it only works at a basic level. It runs entirely on this device. Nothing is uploaded, there is no account and no watermark, and there are no trackers or analytics of any kind. Your videos never leave your phone.</p>
+        <p>VideoWren is a mobile video editor that fits in your pocket: small, offline and free. It runs entirely on this device. Nothing is uploaded, there is no account and no watermark, and there are no trackers or analytics of any kind. Your videos never leave your phone.</p>
         <p>It was built by one person who was tired of 5 MB upload limits and 2 GB editors. The source is on GitHub (Andrematomer/videowren).</p>
       </Collapse>
       <Collapse title="About this device" {...at("About this device")}>

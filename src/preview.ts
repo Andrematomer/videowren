@@ -78,40 +78,54 @@ export class PreviewEngine {
   /** while cutting, the whole uncropped picture is drawn faintly behind the cut one */
   ghost = false;
   /**
-   * Paused and still for a moment: photos and videos are drawn from their full-size originals instead of the small preview
+   * Paused and not being scrubbed: photos and videos are drawn from their full-size originals instead of the small preview
    * copies (playing and moving a picture keep using the small ones). A video needs one frame decoded from the original,
-   * which takes a fraction of a second after the position stops moving.
+   * which starts the moment the position is set and no finger is holding the seek (`holding`).
    */
   private fullOk = false;
-  private fullTimer = 0;
+  private settleQueued = false;
+  private inflight = new Set<string>();
+  /** a finger (or an animation) is moving the position: no full-size frame is made until it lets go */
+  holding = false;
+  /** the position was released: make the full-size frames now */
+  letGo(): void {
+    this.holding = false;
+    if (!this.playing) this.settle();
+  }
+  /** true when the full-size frame of this clip at the shown time is ready */
+  hasFullFrame(clipId: string): boolean {
+    const clip = this.deps.getProject().clips.find((c) => c.id === clipId);
+    const f = clip && this.full.get(clipId);
+    return !!clip && !!f && f.media === clip.mediaId && Math.abs(f.t - sourceAt(clip, this.tl)) < 0.03;
+  }
   private fullGen = 0;
   private full = new Map<string, { media: string; t: number; c: CanvasImageSource & { width: number; height: number } }>();
   private unsettle(): void {
     this.fullOk = false;
     this.fullGen++;
-    clearTimeout(this.fullTimer);
-    if (!this.playing) this.fullTimer = window.setTimeout(() => this.settle(), 350);
   }
   private settle(): void {
-    this.fullTimer = 0;
-    if (this.playing) return;
+    if (this.playing || this.holding) return;
     this.fullOk = true;
     this.draw();
-    const gen = this.fullGen;
     const p = this.deps.getProject();
     const here = new Set(activeAt(p.clips, this.tl).map((i) => p.clips[i]!.id));
     for (const id of [...this.full.keys()]) if (!here.has(id)) this.full.delete(id); // a full-size frame is big: only the ones on screen are kept
     for (const i of activeAt(p.clips, this.tl)) {
       const clip = p.clips[i]!;
       const media = p.media[clip.mediaId];
-      if (!media || media.kind === 'image' || media.kind === 'audio' || !this.deps.hasProxy(clip.mediaId) || this.deps.isBuilding(clip.mediaId)) continue;
+      if (!media || media.kind === 'image' || media.kind === 'audio' || !(this.deps.hasProxy(clip.mediaId) || this.deps.isBuilding(clip.mediaId))) continue;
       const t = sourceAt(clip, this.tl);
       const have = this.full.get(clip.id);
       if (have && have.media === clip.mediaId && Math.abs(have.t - t) < 0.03) continue;
       const blob = this.deps.getBlob(clip.mediaId);
       if (!blob) continue;
+      const key = `${clip.id}@${t.toFixed(3)}`;
+      if (this.inflight.has(key)) continue;
+      this.inflight.add(key);
       void this.fullFrame(blob, media.width, media.height, t).then((c) => {
-        if (!c || gen !== this.fullGen || this.playing) return;
+        this.inflight.delete(key);
+        if (!c || this.playing) return;
         this.full.set(clip.id, { media: clip.mediaId, t, c });
         this.draw();
       });
@@ -265,7 +279,10 @@ export class PreviewEngine {
     const canvas = this.canvas;
     if (!ctx || !canvas) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    if (!this.fullOk && !this.playing && !this.fullTimer) this.unsettle();
+    if (!this.fullOk && !this.playing && !this.holding && !this.settleQueued) {
+      this.settleQueued = true;
+      queueMicrotask(() => ((this.settleQueued = false), this.settle()));
+    }
     const p = this.deps.getProject();
     ctx.fillStyle = p.settings.background || '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -281,6 +298,12 @@ export class PreviewEngine {
       const look = { opacity: clip.opacity, grade: clip.grade, fx: clip.fx, crop: this.cropLive && this.cropLive.index === i ? this.cropLive.crop : clip.crop };
       const faint = this.ghost && this.cropLive?.index === i ? { ...look, crop: undefined, opacity: (look.opacity ?? 1) * 0.35 } : null;
       if (media.kind !== 'image' && this.deps.isBuilding(clip.mediaId)) {
+        // paused: the real frame in full colour (so the picture can be arranged while the copy is made); while playing, the skeleton
+        const f = !this.playing ? this.full.get(clip.id) : undefined;
+        if (f && f.media === clip.mediaId && Math.abs(f.t - sourceAt(clip, this.tl)) < 0.03) {
+          drawLayer(ctx, f.c, f.c.width, f.c.height, look, o);
+          continue;
+        }
         // the preview copy is still being made: no decoding of the big file (that made everything lag), a grey first frame stands in
         const g = this.deps.getGray(clip.mediaId) as (CanvasImageSource & { width: number; height: number }) | undefined;
         if (g) drawLayer(ctx, g, media.width, media.height, { opacity: look.opacity, crop: look.crop }, { ...o, srcW: g.width, srcH: g.height });
@@ -507,8 +530,12 @@ export class PreviewEngine {
   pause(): void {
     this.token++;
     cancelAnimationFrame(this.raf);
+    const was = this.playing;
     this.stopPlaying();
-    this.unsettle();
+    if (was) {
+      this.unsettle();
+      this.settle();
+    }
   }
 
   /** Pause and show the frame at timeline time t. */
@@ -532,12 +559,12 @@ export class PreviewEngine {
     if (tok !== this.token) return;
     this.draw();
     this.deps.onTime(this.tl);
+    this.settle();
   }
 
   async play(): Promise<void> {
     this.fullOk = false;
     this.fullGen++;
-    clearTimeout(this.fullTimer);
     this.full.clear();
     this.wakeAudio();
     const clips = this.deps.getProject().clips;
