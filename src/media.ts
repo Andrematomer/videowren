@@ -77,6 +77,11 @@ const WAVE_MS = 1700;
  * The picture shown in place of a video while its preview copy is made: its first frame in grey and dimmed, with a wave of
  * light that grows from the middle outwards like a ring and starts again (a loading skeleton). `now` is the time in ms.
  */
+/** the first frame in full colour (stands in for a video whose preview copy is still being made) */
+export const mediaThumbCanvas = (id: string): HTMLCanvasElement | undefined => {
+  const f = frames.get(id);
+  return f && f !== 'wait' ? f.gray : undefined;
+};
 export function mediaSkeleton(id: string, now: number, ready: () => void): HTMLCanvasElement | undefined {
   const f = frames.get(id);
   if (f === 'wait') return undefined;
@@ -86,9 +91,7 @@ export function mediaSkeleton(id: string, now: number, ready: () => void): HTMLC
     const w = c.width;
     const h = c.height;
     x.globalCompositeOperation = 'source-over';
-    x.drawImage(f.gray, 0, 0);
-    x.fillStyle = 'rgba(0,0,0,0.3)'; // dimmed
-    x.fillRect(0, 0, w, h);
+    x.clearRect(0, 0, w, h);
     const reach = Math.hypot(w, h) / 2;
     const ph = (now % WAVE_MS) / WAVE_MS;
     const r = ph * (reach + reach * 0.5);
@@ -117,9 +120,6 @@ export function mediaSkeleton(id: string, now: number, ready: () => void): HTMLC
       const gray = make();
       const x = gray.getContext('2d')!;
       x.drawImage(bm, 0, 0);
-      x.globalCompositeOperation = 'saturation'; // a grey on top takes all the colour out and keeps the light
-      x.fillStyle = '#808080';
-      x.fillRect(0, 0, gray.width, gray.height);
       const skeleton = make();
       bm.close();
       if (entries.get(id) === e) frames.set(id, { gray, skeleton });

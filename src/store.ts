@@ -11,7 +11,7 @@ import { activeAt, clipDuration, clipEnd, endOfTrack, overwriteOverlaps, freeTra
 import { DEFAULT_SETTINGS, emptyProject, type Clip, type ExportSettings, type MediaInfo, type Project, type View } from './types.ts';
 
 export type Tool = 'speed' | 'sound' | 'look' | 'effects' | 'clip' | 'text' | 'color' | 'font' | 'outline';
-export type Sheet = 'none' | 'export' | 'settings' | 'canvas' | 'help';
+export type Sheet = 'none' | 'export' | 'settings' | 'canvas' | 'help' | 'import';
 
 export interface Toast {
   text: string;
@@ -47,6 +47,10 @@ export interface State {
   slide: boolean;
   /** the selected strip shows its trim handles */
   handles: boolean;
+  /** a first tap was made and a second may follow: the selection outline / box is hidden meanwhile */
+  tapWait: boolean;
+  /** files waiting in the Import tab to be dragged onto the timeline or the preview */
+  tray: File[];
   /** the crop handles are shown on the preview */
   boxMode: boolean;
   /** the text clip being edited (index), or null when a new text is being made */
@@ -113,6 +117,8 @@ let state: State = {
   locked: false,
   slide: false,
   handles: false,
+  tapWait: false,
+  tray: [],
   boxMode: false,
   textEdit: null,
   proxyProgress: {},
@@ -130,6 +136,18 @@ setPhotoPreviewPx(bootPrefs.photoLong);
 const subs = new Set<() => void>();
 export const getState = (): State => state;
 
+/** the window (ms) in which a second tap makes a double tap */
+export const DOUBLE_MS = 260;
+let tapWaitTimer = 0;
+export function armTapWait(): void {
+  clearTimeout(tapWaitTimer);
+  set({ tapWait: true });
+  tapWaitTimer = window.setTimeout(() => set({ tapWait: false }), DOUBLE_MS);
+}
+export function endTapWait(): void {
+  clearTimeout(tapWaitTimer);
+  if (state.tapWait) set({ tapWait: false });
+}
 export function set(patch: Partial<State>): void {
   state = { ...state, ...patch };
   subs.forEach((f) => f());
@@ -947,7 +965,7 @@ export async function pasteFromEvent(dt: DataTransfer | null, mode: AddMode = 't
 }
 
 /** Pastes what is on the clipboard: a picture, video or sound becomes media, plain text becomes a text clip. */
-export async function pasteClipboard(mode: AddMode): Promise<void> {
+export async function pasteClipboard(mode: AddMode, toTray = false): Promise<void> {
   try {
     if (navigator.clipboard?.read) {
       const items = await navigator.clipboard.read();
@@ -960,7 +978,7 @@ export async function pasteClipboard(mode: AddMode): Promise<void> {
           files.push(new File([blob], `Pasted.${media.split('/')[1]!.split('+')[0]}`, { type: media }));
         } else if (it.types.includes('text/plain')) text = await (await it.getType('text/plain')).text();
       }
-      if (files.length) return void (await importFiles(files, mode));
+      if (files.length) return void (toTray ? set({ tray: files }) : await importFiles(files, mode));
       if (text?.trim()) return void (await addTextClip(mode, text.trim()));
     } else if (navigator.clipboard?.readText) {
       const t = (await navigator.clipboard.readText()).trim();

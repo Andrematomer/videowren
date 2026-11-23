@@ -4,7 +4,7 @@ import { editText, set, setSolidColor, setSpeed, targets, updateClip, useStore, 
 import { TEXT_FONTS, autoOutline } from '../text.ts';
 import { MAX_SPEED, MIN_SPEED, clipDuration, fmtTime } from '../timeline.ts';
 import type { Fx, Grade, MediaInfo } from '../types.ts';
-import { Download, Effects, FontIcon, Gear, Help, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
+import { ImportIcon, Download, Effects, FontIcon, Gear, Help, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
 import { Slider } from './Slider.tsx';
 import { useSwap } from './swap.ts';
 
@@ -57,13 +57,14 @@ export function TabBar() {
   const tabs = picked.length === 0 ? [] : TABS.map((t) => t.key).filter((k) => picked.every((c) => tabsFor(mediaOf[c.mediaId]).includes(k)) && !(k === 'text' && picked.length > 1));
   const sig = picked.length === 0 ? 'project' : tabs.join() || 'none';
   const { shown, cls } = useSwap({ project: picked.length === 0, tabs }, sig);
-  const openSheet = (name: 'help' | 'canvas' | 'settings' | 'export') => () => set({ sheet: sheet === name ? 'none' : name, drawer: null });
+  const openSheet = (name: 'import' | 'help' | 'canvas' | 'settings' | 'export') => () => set({ sheet: sheet === name ? 'none' : name, drawer: null });
   if (shown.project) {
     // nothing selected: the tools of the whole project (they rise over the timeline like any other tool)
-    const items: { name: 'help' | 'canvas' | 'settings' | 'export'; label: string; icon: preact.JSX.Element }[] = [
-      { name: 'help', label: 'Help', icon: <Help /> },
+    const items: { name: 'import' | 'help' | 'canvas' | 'settings' | 'export'; label: string; icon: preact.JSX.Element }[] = [
+      { name: 'import', label: 'Import', icon: <ImportIcon /> },
       { name: 'canvas', label: 'Canvas', icon: <i class="canvas-ico" aria-hidden="true" /> },
       { name: 'settings', label: 'Settings', icon: <Gear /> },
+      { name: 'help', label: 'Help', icon: <Help /> },
       { name: 'export', label: 'Export', icon: <Download /> },
     ];
     return (
@@ -194,7 +195,7 @@ export function Drawer() {
   const tab = sw.shown ?? shown;
   const dur = clipDuration(clip);
   const pct = Math.round(clip.volume * 100);
-  const setVol = (v: number) => updateClip(index, { volume: Math.min(1, Math.max(0, v / 100)) });
+  const setVol = (v: number) => updateClip(index, { volume: Math.min(4, Math.max(0, v / 100)) });
   const toggleMute = () => {
     if (clip.volume > 0) {
       before.set(clip.id, clip.volume);
@@ -313,7 +314,7 @@ export function Drawer() {
               {pct === 0 ? <Mute /> : <Sound />}
             </button>
             <ResetLabel label="Volume" onReset={() => setVol(100)} />
-            <Slider label="Volume" value={pct} min={0} max={100} step={1} fineStep={0.5} snaps={[0, 100]} snapPx={14} valueText={pct === 0 ? 'muted' : `${pct} percent`} onChange={setVol} />
+            <Slider label="Volume" value={pct} min={0} max={400} step={1} fineStep={0.5} snaps={[0, 100, 200, 300, 400]} snapPx={14} valueText={pct === 0 ? 'muted' : `${pct} percent`} onChange={setVol} />
             <span class="num dval">{pct === 0 ? 'Muted' : `${pct}%`}</span>
           </section>
         )}

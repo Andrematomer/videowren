@@ -1,4 +1,5 @@
-import { mediaBitmap, mediaBlob, mediaEntry, mediaSkeleton, mediaPreviewBitmap, mediaUrl } from './media.ts';
+import { withPriority } from './proxy.ts';
+import { mediaBitmap, mediaBlob, mediaEntry, mediaSkeleton, mediaThumbCanvas, mediaPreviewBitmap, mediaUrl } from './media.ts';
 import { PreviewEngine } from './preview.ts';
 import { onBakeChange, progress } from './bake.ts';
 import { getState, set } from './store.ts';
@@ -12,7 +13,10 @@ export const engine = new PreviewEngine({
   getFullImage: mediaBitmap,
   hasProxy: (id) => !!mediaEntry(id)?.proxy,
   isBuilding: (id) => getState().proxyProgress[id] !== undefined,
-  getGray: (id) => mediaSkeleton(id, performance.now(), () => engine.draw()),
+  getGray: (id) => (mediaSkeleton(id, performance.now(), () => engine.draw()), mediaThumbCanvas(id)),
+  getWave: (id) => mediaSkeleton(id, performance.now(), () => engine.draw()),
+  frameLong: () => Math.max(360, getState().prefs.previewLong),
+  priority: withPriority,
   getBlob: mediaBlob,
   onTime: (t) => set({ playhead: t }),
   onPlaying: (playing) => set({ playing }),
@@ -29,7 +33,7 @@ const skeletonTick = () => {
   skeletonLoop = 0;
   if (engine.playing) return;
   const st = getState();
-  const on = activeAt(st.project.clips, engine.tl).some((i) => st.proxyProgress[st.project.clips[i]!.mediaId] !== undefined && !engine.hasFullFrame(st.project.clips[i]!.id) && !['image', 'audio'].includes(st.project.media[st.project.clips[i]!.mediaId]?.kind ?? ''));
+  const on = activeAt(st.project.clips, engine.tl).some((i) => st.proxyProgress[st.project.clips[i]!.mediaId] !== undefined && !['image', 'audio'].includes(st.project.media[st.project.clips[i]!.mediaId]?.kind ?? ''));
   if (!on) return;
   engine.draw();
   skeletonLoop = requestAnimationFrame(skeletonTick);

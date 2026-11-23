@@ -10,7 +10,7 @@
   --danger: #ff7a70;
   --safe-t: env(safe-area-inset-top, 0px);
   /* the home bar of an iPhone is 34 px high but the bar itself only needs a little room: keeping all of it made a big empty chin */
-  --safe-b: min(env(safe-area-inset-bottom, 0px), 18px);
+  --safe-b: min(env(safe-area-inset-bottom, 0px), 10px);
   color-scheme: dark;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
@@ -3171,9 +3171,7 @@ button.tl-time.tap {
   padding: 0 8px;
   font-size: 12px;
 }
-.strip-clip.generating .strip-thumb {
-  filter: grayscale(1) brightness(0.6);
-}
+
 .build-note {
   position: absolute;
   z-index: 6;
@@ -3221,28 +3219,73 @@ button.tl-time.tap {
   height: 100%;
   display: block;
 }
-.rec-bar {
+.aim-line {
   position: fixed;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: #ffc933;
+  z-index: 70;
+  pointer-events: none;
+}
+.aim-line::after {
+  content: '';
+  position: absolute;
   left: 50%;
-  top: calc(env(safe-area-inset-top, 0px) + 10px);
-  transform: translateX(-50%);
-  z-index: 60;
+  bottom: -5px;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  border-radius: 50%;
+  background: #ffc933;
+}
+.import-choices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px;
+}
+.import-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 78px;
+  border-radius: 14px;
+  background: var(--raised);
+  color: var(--fg, inherit);
+  font-size: 13px;
+  border: 0;
+  cursor: pointer;
+}
+.recorder,
+.tray {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+}
+.recorder p,
+.tray-hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.rec-time {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px 6px 14px;
-  border-radius: 999px;
-  background: rgba(20, 20, 20, 0.92);
-  color: #fff;
-  font-size: 14px;
+  font-size: 34px;
+  font-weight: 700;
 }
-.rec-bar .cta {
-  padding: 6px 16px;
-  min-height: 0;
+.rec-actions {
+  display: flex;
+  gap: 10px;
 }
 .rec-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #ff3b30;
   animation: rec-blink 1s infinite;
@@ -3251,4 +3294,84 @@ button.tl-time.tap {
   50% {
     opacity: 0.25;
   }
+}
+.tray-card {
+  position: relative;
+  width: min(220px, 70%);
+  aspect-ratio: 16 / 10;
+  padding: 8px;
+  border-radius: 18px;
+  background: var(--raised);
+  border: 2px dashed var(--accent, #ffc933);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grab;
+  box-sizing: border-box;
+}
+.tray-card.dragging {
+  opacity: 0.35;
+}
+.tray-grid {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 1fr;
+}
+.tray-grid.n1 {
+  grid-template-columns: 1fr;
+}
+.tray-thumb {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #000;
+  pointer-events: none;
+}
+.tray-thumb.sound {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2b4c8c;
+  color: #fff;
+}
+.tray-count {
+  position: absolute;
+  right: -8px;
+  top: -8px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: #ffc933;
+  color: #000;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tray-flying {
+  position: fixed;
+  width: 70px;
+  height: 52px;
+  margin: -26px 0 0 -35px;
+  z-index: 80;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, 0.5));
+}
+.drawer.sheet-panel {
+  transition: opacity 0.12s;
+}
+.tray-drag .drawer.sheet-panel {
+  visibility: hidden;
+}
+.tray-drag .tray-flying {
+  visibility: visible;
 }

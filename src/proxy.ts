@@ -29,6 +29,21 @@ export const onProxyChange = (f: () => void): void => {
   changed = f;
 };
 let running = false;
+/** how many urgent jobs (one frame for the screen) are running; the copy is only made while there are none */
+let urgent = 0;
+const pausers = new Set<AbortController>();
+const calm: (() => void)[] = [];
+/** runs `f` first: making the preview copy pauses meanwhile (the phone decodes one thing at a time, so a single frame would wait behind it) */
+export async function withPriority<T>(f: () => Promise<T>): Promise<T> {
+  urgent++;
+  pausers.forEach((a) => a.abort());
+  try {
+    return await f();
+  } finally {
+    urgent--;
+    if (urgent === 0) calm.splice(0).forEach((r) => r());
+  }
+}
 let listener: (working: boolean) => void = () => {};
 
 export const onProxyWork = (f: (working: boolean) => void): void => {
@@ -113,7 +128,17 @@ async function makeProxy(source: Blob, info: MediaInfo, long: number, cancelled:
     conv.onProgress = (p) => report(p);
     const watch = setInterval(() => cancelled() && void conv.cancel(), 1000);
     try {
-      await conv.execute();
+      // runs in pieces: whenever a single frame is wanted for the screen the work pauses (see withPriority) and then carries on
+      while (conv.state !== 'done' && conv.state !== 'canceled') {
+        if (urgent > 0) await new Promise<void>((r) => calm.push(r));
+        const ac = new AbortController();
+        pausers.add(ac);
+        try {
+          await conv.execute({ pauseSignal: ac.signal });
+        } finally {
+          pausers.delete(ac);
+        }
+      }
     } finally {
       clearInterval(watch);
     }

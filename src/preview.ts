@@ -13,6 +13,12 @@ export interface PreviewDeps {
   isBuilding(mediaId: string): boolean;
   /** a grey picture of the first frame (shown in place of a video that is being prepared) */
   getGray(mediaId: string): CanvasImageSource | undefined;
+  /** the moving light drawn over a video that is being prepared (transparent elsewhere, same size as the grey picture) */
+  getWave(mediaId: string): CanvasImageSource | undefined;
+  /** long side (pixels) of the quick frames shown while the preview copy is being made */
+  frameLong(): number;
+  /** runs a job before the making of the preview copies (which pauses meanwhile) */
+  priority<T>(f: () => Promise<T>): Promise<T>;
   /** the full-size picture of a photo (the preview normally draws a smaller copy) */
   getFullImage(mediaId: string): ImageBitmap | undefined;
   /** true when a video is shown from its small preview copy */
@@ -123,21 +129,23 @@ export class PreviewEngine {
       const key = `${clip.id}@${t.toFixed(3)}`;
       if (this.inflight.has(key)) continue;
       this.inflight.add(key);
-      void this.fullFrame(blob, media.width, media.height, t).then((c) => {
+      const building = this.deps.isBuilding(clip.mediaId);
+      const run = () => this.fullFrame(blob, media.width, media.height, t, building ? this.deps.frameLong() : 1920);
+      void (building ? this.deps.priority(run) : run()).then((c) => {
         this.inflight.delete(key);
-        if (!c || this.playing) return;
+        if (!c) return;
         this.full.set(clip.id, { media: clip.mediaId, t, c });
         this.draw();
       });
     }
   }
   /** one frame of the original file at source time t, at most 1920 px on the long side */
-  private async fullFrame(blob: Blob, w: number, h: number, t: number): Promise<(CanvasImageSource & { width: number; height: number }) | null> {
+  private async fullFrame(blob: Blob, w: number, h: number, t: number, long: number): Promise<(CanvasImageSource & { width: number; height: number }) | null> {
     const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
     try {
       const vt = await input.getPrimaryVideoTrack();
       if (!vt) return null;
-      const k = Math.min(1, 1920 / Math.max(w, h));
+      const k = Math.min(1, long / Math.max(w, h));
       const sink = new CanvasSink(vt, { width: Math.max(2, Math.round(w * k)), height: Math.max(2, Math.round(h * k)), fit: 'fill' });
       const f = await sink.getCanvas(t);
       return (f?.canvas as (CanvasImageSource & { width: number; height: number }) | undefined) ?? null;
@@ -298,15 +306,15 @@ export class PreviewEngine {
       const look = { opacity: clip.opacity, grade: clip.grade, fx: clip.fx, crop: this.cropLive && this.cropLive.index === i ? this.cropLive.crop : clip.crop };
       const faint = this.ghost && this.cropLive?.index === i ? { ...look, crop: undefined, opacity: (look.opacity ?? 1) * 0.35 } : null;
       if (media.kind !== 'image' && this.deps.isBuilding(clip.mediaId)) {
-        // paused: the real frame in full colour (so the picture can be arranged while the copy is made); while playing, the skeleton
-        const f = !this.playing ? this.full.get(clip.id) : undefined;
-        if (f && f.media === clip.mediaId && Math.abs(f.t - sourceAt(clip, this.tl)) < 0.03) {
-          drawLayer(ctx, f.c, f.c.width, f.c.height, look, o);
-          continue;
-        }
-        // the preview copy is still being made: no decoding of the big file (that made everything lag), a grey first frame stands in
+        // the latest frame that was made stays on screen (also while the position moves: it is replaced when the new one is ready);
+        // before there is one, the first frame. The moving light is always on top.
+        const f = this.full.get(clip.id);
+        const base = f && f.media === clip.mediaId ? { c: f.c as CanvasImageSource, w: f.c.width, h: f.c.height } : undefined;
         const g = this.deps.getGray(clip.mediaId) as (CanvasImageSource & { width: number; height: number }) | undefined;
-        if (g) drawLayer(ctx, g, media.width, media.height, { opacity: look.opacity, crop: look.crop }, { ...o, srcW: g.width, srcH: g.height });
+        const w = this.deps.getWave(clip.mediaId) as (CanvasImageSource & { width: number; height: number }) | undefined;
+        const b = base ?? (g ? { c: g as CanvasImageSource, w: g.width, h: g.height } : undefined);
+        if (b) drawLayer(ctx, b.c, b.w, b.h, base ? look : { opacity: look.opacity, crop: look.crop }, base ? o : { ...o, srcW: g!.width, srcH: g!.height });
+        if (w) drawLayer(ctx, w, media.width, media.height, { opacity: look.opacity, crop: look.crop }, { ...o, srcW: w.width, srcH: w.height });
         continue;
       }
       const still = this.fullOk && !this.playing && !this.live && !this.liveMany && !this.cropLive;
@@ -565,7 +573,7 @@ export class PreviewEngine {
   async play(): Promise<void> {
     this.fullOk = false;
     this.fullGen++;
-    this.full.clear();
+    for (const [id, f] of [...this.full]) if (!this.deps.isBuilding(f.media)) this.full.delete(id); // the frames shown for videos that are still being prepared stay
     this.wakeAudio();
     const clips = this.deps.getProject().clips;
     if (clips.length === 0) return;

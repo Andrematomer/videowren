@@ -35,8 +35,8 @@ After the first visit it works with no connection.
 |---|---|
 | Timeline | Lanes of strips; the yellow line is fixed and the timeline scrolls under it. Pinch to zoom (from a frame up to about ten minutes across the screen). Higher lanes draw on top. Hold a strip to lift it, then drag it in time or to another lane; it snaps to the edges of its neighbors on any layer. Drag the handles of the selected strip to trim; hold still for fine control. In edit mode, dragging a video or sound strip slips its content inside the strip. Drag up or down on the timeline to zoom, sideways to seek; the line catches strip edges and marks every strip that has that edge. |
 | Gaps | Tap empty space between strips to pick the gap (dark red), tap its trash can to remove it: everything after it moves earlier, and anything that would collide hops to the next free lane. |
-| Tabs | With a clip selected: its tabs (Speed, Sound, Look, Text...) raise a drawer over the timeline. With nothing selected (tap an empty lane, a gap or the space around the canvas): Help, Canvas, Settings (with Delete project), Export. Every panel has a × to close it. |
-| Middle bar | Play, Add (first where it goes: after the last strip of the whole timeline, on current time (files one after another from the yellow line, as one group that moves to the next free lane together if anything is in the way), as layers (all at the yellow line, each on its own lane), or in place of the selected strip; then Media, Text, Color or Clipboard. Replacing keeps the strip's look, effects, opacity, volume, position, crop and speed wherever they still apply), Delete, Undo, Redo, Split (the gap icon), Duplicate (the copy sits at the same time, one layer out). With nothing selected, Delete becomes Simplify timeline and Duplicate becomes Paste. The whole area after the dashed line is the pane divider: drag or flick it to trade height between preview and timeline. |
+| Tabs | With a clip selected: its tabs (Speed, Sound, Look, Text...) raise a drawer over the timeline. With nothing selected (tap an empty lane, a gap or the space around the canvas): Import, Canvas, Settings (with Delete project), Export. Every panel has a × to close it. |
+| Middle bar | Play, Delete, Undo, Redo, Split (the gap icon), Duplicate (the copy sits at the same time, one layer out). With nothing selected, Delete becomes Simplify timeline and Duplicate becomes Paste. The whole area after the dashed line is the pane divider: drag or flick it to trade height between preview and timeline. |
 | Empty lanes | Tap an empty lane that lies between used lanes to pick it (dark red), tap it again to take it out: the strips on its far side (further from lane 0) move one lane closer. Simplify timeline (button in the middle bar when nothing is selected)  moves every strip as close to lane 0 as it can go without changing what covers what. |
 | Split | The Split button cuts the selected strip at the yellow line, or every strip under the line when nothing is selected. |
 | Several strips | Hold on empty space in the timeline (a gap too) or on the preview, even outside the canvas, until the box appears, then drag it over strips to pick them. Tap strips to add or remove them, or hold and box again to add more. A box around the picked strips on screen scales and turns them as a group, and so do one or two fingers on the preview. Tabs shared by all of them stay; sound, speed and look changes reach all, and dragging one moves all. |
@@ -90,3 +90,12 @@ The export approach (WebCodecs, Mediabunny, canvas rendering) comes from the aut
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## Import, recording, taps
+
+- **Import tab** (first tab with nothing selected): Media, Text, Color, Record audio, Clipboard. Media, Clipboard and recordings wait as a card of thumbnails that is dragged onto the timeline or the preview; the outline shows the landing place and a yellow line joins it to the finger on touch screens.
+- **Record audio** records in the drawer without playing; the take appears as a card to drag. On iPhone the audio session is set back to playback afterwards.
+- **Double tap** a strip in the timeline: it zooms to span the middle half of the screen. A single tap selects (and glides the yellow line to the strip). The outline (timeline) or box (preview) hides while a second tap may follow.
+- **Volume** goes from 0 to 400 %.
+- While a video's preview copy is being made, the current frame is decoded at preview size (the copy pauses meanwhile), the last frame stays while seeking, and the moving light and note stay on top.

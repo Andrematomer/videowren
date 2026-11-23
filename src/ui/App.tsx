@@ -7,6 +7,7 @@ import { activeAt } from '../timeline.ts';
 import { toast as say, deleteClip, deselect, duplicateClip, getState, importFiles, pasteFromEvent, redo, setMulti, removeGap, removeLane, restore, set, splitAtPlayhead, undo, useStore } from '../store.ts';
 import { CanvasSheet } from './CanvasSheet.tsx';
 import { HelpSheet } from './HelpSheet.tsx';
+import { ImportSheet } from './ImportSheet.tsx';
 import { ExportSheet } from './ExportSheet.tsx';
 import { Camera, Copy, Gear, Help, Plus, Redo, Shrink, Trash, Undo } from './icons.tsx';
 import { FilePicker, PickLabel } from './Picker.tsx';
@@ -14,11 +15,10 @@ import { Preview } from './Preview.tsx';
 import { Drawer, TabBar } from './Drawer.tsx';
 import { SettingsSheet } from './SettingsSheet.tsx';
 import { saveFrame } from '../frame.ts';
-import { aim } from '../dropAim.ts';
+import { aim, dragCtl, lift, showDropPreview, whereAt } from '../dropAim.ts';
 import { isAudioFile } from '../media.ts';
 import { Timeline } from './Timeline.tsx';
 import { browserInfo, checkSupport } from '../support.ts';
-import { stopRecording, recordingSeconds, useRecording } from '../recorder.ts';
 import qrcode from 'qrcode-generator';
 
 const support = checkSupport();
@@ -63,6 +63,7 @@ export function App() {
   }, [sheet]);
   const shownSheet = sheet !== 'none' ? sheet : lastSheet;
   const busy = useStore((s) => s.busy);
+  const [aimAt, setAimAt] = useState<{ x: number; y: number } | null>(null);
   const toast = useStore((s) => s.toast);
   const [tlH, setTlH] = useState(() => {
     try {
@@ -86,12 +87,10 @@ export function App() {
     let edge: { side: string; since: number } | null = null;
     let timer = 0;
     let kindsOf: boolean[] = [];
-    // a finger covers what is right under it: on a touch screen the aim sits above the fingertip (a mouse has no such need)
-    const lift = () => (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 72 : 0);
-    const where = () => {
-      const els = document.elementsFromPoint(pos.x, pos.y - lift());
-      return { lane: els.find((x) => x.classList.contains('tl-lane')) ?? null, stage: els.find((x) => x.classList.contains('stage')) ?? null };
-    };
+    let lastEvent = 0;
+    /** the drag comes from the Import tab (pointer events): it ends with its own finger, never by a silence timeout */
+    let own = false;
+    const where = () => whereAt(pos.x, pos.y);
     const clear = () => {
       lit?.classList.remove('target');
       stage?.classList.remove('drop-on');
@@ -108,7 +107,8 @@ export function App() {
       }
       // the yellow outlines in the timeline show where the files would land (nothing is lit up any more)
       const kinds = kindsOf.length ? kindsOf : [false];
-      window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: w.lane ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'stage' } : null }));
+      showDropPreview(w.lane ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'stage' } : null);
+      setAimAt(w.lane || w.stage ? { x: pos.x, y: pos.y } : null);
       // held on the highest or lowest lane: a new lane opens now and then
       const lanes = [...document.querySelectorAll('.tl-lane')];
       const side = lit && lit === lanes[0] ? 'top' : lit && lit === lanes[lanes.length - 1] ? 'bottom' : '';
@@ -126,19 +126,24 @@ export function App() {
       edge = null;
       kindsOf = [];
       clear();
-      window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: null }));
+      own = false;
+      showDropPreview(null);
+      setAimAt(null);
       window.dispatchEvent(new CustomEvent('pc-lanes', { detail: 'reset' }));
     };
     const over = (e: DragEvent) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
       pos = { x: e.clientX, y: e.clientY };
+      lastEvent = performance.now();
       // one entry per dragged item (some browsers report the kind of an item as something else than 'file' while it is still in the air)
       const it = e.dataTransfer?.items;
       const n = Math.max(it?.length ?? 0, kindsOf.length);
       kindsOf = Array.from({ length: n }, (_, i) => !!it?.[i]?.type?.startsWith('audio/'));
       update();
-      if (!timer) timer = window.setInterval(update, 150); // a drag that stands still sends no events
+      // a drag that stands still sends no events. If the system ended the drag without telling the page (a second finger on the screen does that on
+      // iPhone), nothing arrives any more: then the outlines go away instead of staying for good
+      if (!timer) timer = window.setInterval(() => (!own && performance.now() - lastEvent > 2500 ? stop() : update()), 150);
     };
     const leave = (e: DragEvent) => {
       if (!e.relatedTarget) stop();
@@ -151,21 +156,53 @@ export function App() {
       const w = where();
       const target = aim.value ? { ...aim.value } : null;
       // the outlines stay until the files are read and their strips appear
-      const done = () => window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: null }));
+      const done = () => showDropPreview(null);
       stop();
       if (w.lane && target) {
-        window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: { x: pos.x, y: pos.y - lift(), kinds: files.map((f) => isAudioFile(f)), mode: 'lane' } }));
+        showDropPreview({ x: pos.x, y: pos.y - lift(), kinds: files.map((f) => isAudioFile(f)), mode: 'lane' });
         void importFiles(files, 'time', { track: target.track, at: target.at }).finally(done);
       } else if (w.stage) void importFiles(files, 'playhead');
       else void importFiles(files);
+    };
+    dragCtl.cur = {
+      move: (x, y, kinds) => {
+        own = true;
+        pos = { x, y };
+        kindsOf = kinds;
+        lastEvent = performance.now();
+        update();
+        if (!timer) timer = window.setInterval(update, 150);
+      },
+      end: () => {
+        const w = where();
+        const target = aim.value ? { ...aim.value } : null;
+        const p = { ...pos };
+        const r = { lane: !!w.lane, stage: !!w.stage, target, pos: p };
+        clearInterval(timer);
+        timer = 0;
+        edge = null;
+        kindsOf = [];
+        own = false;
+        clear();
+        setAimAt(null);
+        return r;
+      },
+      cancel: () => stop(),
     };
     window.addEventListener('dragenter', over);
     window.addEventListener('dragover', over);
     window.addEventListener('dragleave', leave);
     window.addEventListener('drop', drop);
     window.addEventListener('dragend', stop);
+    // another finger touching the screen while files are being dragged: the drag is over as far as the page is concerned
+    const touched = () => timer && !own && stop();
+    window.addEventListener('touchstart', touched, { passive: true });
+    window.addEventListener('pointerdown', touched, { passive: true });
     return () => {
+      window.removeEventListener('touchstart', touched);
+      window.removeEventListener('pointerdown', touched);
       stop();
+      dragCtl.cur = null;
       window.removeEventListener('dragenter', over);
       window.removeEventListener('dragover', over);
       window.removeEventListener('dragleave', leave);
@@ -284,7 +321,7 @@ export function App() {
   return (
     <div class={`app ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
       <FilePicker />
-      <RecordBar />
+      {aimAt && lift() > 0 && <div class="aim-line" style={{ left: `${aimAt.x}px`, top: `${aimAt.y - lift()}px`, height: `${lift()}px` }} />}
       {locked && <div class="lock-veil" />}
 
       {busy && !hasClips && <div class="busy">{busy}</div>}
@@ -305,6 +342,7 @@ export function App() {
             <Drawer />
           <div class={leaving ? 'sheet-out' : 'sheet-host'}>
           {shownSheet === 'export' && <ExportSheet onClose={() => set({ sheet: 'none' })} />}
+          {shownSheet === 'import' && <ImportSheet onClose={() => set({ sheet: 'none' })} />}
           {shownSheet === 'help' && <HelpSheet onClose={() => set({ sheet: 'none' })} />}
           {shownSheet === 'canvas' && <CanvasSheet onClose={() => set({ sheet: 'none' })} />}
           {shownSheet === 'settings' && <SettingsSheet onClose={() => set({ sheet: 'none' })} />}
@@ -376,27 +414,6 @@ function Empty({ onEnter }: { onEnter: () => void }) {
       {steps && <InstallSteps onClose={() => setSteps(false)} />}
       {qr && <PhoneCode onClose={() => setQr(false)} />}
     </main>
-  );
-}
-
-function RecordBar() {
-  const on = useRecording();
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!on) return;
-    const i = window.setInterval(() => tick((n) => n + 1), 200);
-    return () => window.clearInterval(i);
-  }, [on]);
-  if (!on) return null;
-  const s = recordingSeconds();
-  return (
-    <div class="rec-bar" role="status">
-      <span class="rec-dot" />
-      <span>Recording {Math.floor(s / 60)}:{String(Math.floor(s % 60)).padStart(2, '0')}</span>
-      <button class="cta" onClick={stopRecording}>
-        Stop
-      </button>
-    </div>
   );
 }
 

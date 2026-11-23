@@ -1,7 +1,7 @@
-import { importFiles } from './store.ts';
+import { importFiles, set } from './store.ts';
 
 /** Where the next picked files go: after the last strip, or as a layer at the yellow line. Set by the button that opened the picker. */
-export type PickMode = import('./store.ts').AddMode;
+export type PickMode = import('./store.ts').AddMode | 'tray';
 let pickMode: PickMode = 'end';
 export const setPickMode = (m: PickMode): void => {
   pickMode = m;
@@ -19,6 +19,7 @@ export function onPicked(input: HTMLInputElement): void {
   input.value = '';
   const mode = pickMode;
   pickMode = 'end';
+  if (mode === 'tray') return void (files.length && set({ tray: files }));
   void importFiles(files, mode);
 }
 

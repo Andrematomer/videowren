@@ -153,7 +153,7 @@ async function renderPartAudio(
       }
     }
     const stretched = clip.keepPitch ? timeStretch(chans, rate, clip.speed) : resample(chans, clip.speed);
-    if (clip.volume < 1) for (const ch of stretched) for (let i = 0; i < ch.length; i++) ch[i]! *= clip.volume;
+    if (clip.volume !== 1) for (const ch of stretched) for (let i = 0; i < ch.length; i++) ch[i]! *= clip.volume;
     const ab = new AudioBuffer({ length: stretched[0]!.length, numberOfChannels: chCount, sampleRate: rate });
     stretched.forEach((data, c) => ab.copyToChannel(data as Float32Array<ArrayBuffer>, c));
     const node = ctx.createBufferSource();

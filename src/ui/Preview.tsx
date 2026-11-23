@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { engine } from '../engine.ts';
 import { endFine as hudEndFine, hide, hold, release as releaseHud, say, startFine } from '../hud.ts';
 import { type Rect, baseScale, clampView, fitSegment, shownBox, tapCell, clampZoom, dragView, fitZoom, normAngle, outputSize, pinchView, snapEightCropped, snapView, snapViewCropped, type Pt } from '../geometry.ts';
-import { resetTransform, deselect, getState, selectClip, set, setCrop, setMulti, setViews, toggleMulti, updateClip, useStore } from '../store.ts';
+import { DOUBLE_MS, armTapWait, endTapWait, resetTransform, deselect, getState, selectClip, set, setCrop, setMulti, setViews, toggleMulti, updateClip, useStore } from '../store.ts';
 import { localPoint } from '../turn.ts';
 import { activeAt, fmtTime, totalOf } from '../timeline.ts';
 import type { Clip, Crop, View } from '../types.ts';
@@ -13,6 +13,7 @@ export function Preview() {
   const project = useStore((s) => s.project);
   const selected = useStore((s) => s.selected);
   const busy = useStore((s) => s.busy);
+  const tapWait = useStore((s) => s.tapWait);
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -95,8 +96,8 @@ export function Preview() {
       <div class="frame" style={{ width: `${box.w}px`, height: `${box.h}px` }}>
         <canvas ref={canvas} style={{ width: `${box.w}px`, height: `${box.h}px` }} />
         {box.w > 0 && <Gestures boxW={box.w} boxH={box.h} />}
-        {box.w > 0 && clip && media && <TransformBox boxW={box.w} boxH={box.h} />}
-        {box.w > 0 && <GroupBox boxW={box.w} boxH={box.h} />}
+        {box.w > 0 && clip && media && !tapWait && <TransformBox boxW={box.w} boxH={box.h} />}
+        {box.w > 0 && !tapWait && <GroupBox boxW={box.w} boxH={box.h} />}
         {busy && <div class="overlay-note">{busy}</div>}
         {box.w > 0 && <BuildPies boxW={box.w} boxH={box.h} />}
       </div>
@@ -123,22 +124,14 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   });
   // while a picture is moved, turned, scaled, cropped or sliding into place, the note goes with it, frame by frame
   const [, tick] = useState(0);
-  // paused, the real frame is shown in full colour as soon as it is ready, and then there is no note
-  const fullFlags = () => {
-    const st = getState();
-    return st.project.clips.map((c) => (!engine.playing && st.proxyProgress[c.mediaId] !== undefined && engine.hasFullFrame(c.id) ? 1 : 0)).join('');
-  };
-  const seen = useRef('');
   useEffect(() => {
     engine.onDraw = () => {
-      const f = fullFlags();
-      if (engine.live || engine.liveMany || engine.cropLive || f !== seen.current) tick((n) => n + 1);
+      if (engine.live || engine.liveMany || engine.cropLive) tick((n) => n + 1);
     };
     return () => {
       engine.onDraw = null;
     };
   });
-  seen.current = fullFlags();
   if (!key) return null;
   const st = getState();
   return (
@@ -149,7 +142,6 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
         const c = st.project.clips[i];
         const m = c && st.project.media[c.mediaId];
         if (!c || !m) return null;
-        if (!engine.playing && engine.hasFullFrame(c.id)) return null;
         const view = engine.liveMany?.get(i) ?? (engine.live && engine.live.index === i ? engine.live.view : c.view);
         const crop = engine.cropLive && engine.cropLive.index === i ? engine.cropLive.crop : c.crop;
         const q = quadOf({ ...c, view, crop }, m, W, H);
@@ -517,7 +509,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     modeSay.current = window.setTimeout(() => {
       set({ handles: edit });
       say(edit ? 'Edit mode' : 'Select mode');
-    }, 330);
+    }, DOUBLE_MS + 20);
   };
   /** a finger held still on empty canvas or on a strip that is not the picked one starts (or grows) a multi-selection */
   const holdPick = (cx: number, cy: number, selBefore: number) => {
@@ -912,8 +904,9 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     flush();
     if (tp && !tp.moved && !tp.multi && performance.now() - tp.t < 300) {
       const lt = lastTap.current;
-      if (lt && tp.t - lt.t < 400 && Math.hypot(tp.x - lt.x, tp.y - lt.y) < 40) {
+      if (lt && tp.t - lt.t < DOUBLE_MS + 60 && Math.hypot(tp.x - lt.x, tp.y - lt.y) < 40) {
         lastTap.current = null;
+        endTapWait();
         clearTimeout(cropTimer.current);
         // a double tap works on what was selected before it: the first touch of the pair must not have switched the selection
         if (lt.prevMulti.length > 0) setMulti(lt.prevMulti);
@@ -929,10 +922,12 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
           // a double tap then works on that picture (it stays picked), in select mode
           lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev: getState().selected, prevMulti: [], prevHandles: false };
           autoPicked.current = false;
+          if (getState().selected >= 0) armTapWait();
           return;
         }
         pickAt(tp.x, tp.y);
         lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev, prevMulti, prevHandles };
+        if (getState().selected >= 0 && getState().multi.length === 0) armTapWait();
       }
     }
   };

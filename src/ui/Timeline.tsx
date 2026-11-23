@@ -3,15 +3,13 @@ import { keyOf } from '../bake.ts';
 import { engine } from '../engine.ts';
 import { thumbUrl } from '../media.ts';
 import { hold, release as releaseHud, say } from '../hud.ts';
-import { optimizeWithFeedback, pasteClipboard, addSolid, addTextClip, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
+import { DOUBLE_MS, armTapWait, endTapWait, optimizeWithFeedback, pasteClipboard, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
 import { PEAKS_PER_SEC } from '../wave.ts';
 import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, stackTracks, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
-import { PickLabel } from './Picker.tsx';
 import { aim } from '../dropAim.ts';
 import { Pie } from './Pie.tsx';
-import { startRecording } from '../recorder.ts';
-import { MicIcon, AfterIcon, ClockIcon, Copy, GapH, ImageIcon, LayersIcon, PaletteIcon, Pause, PasteIcon, Play, Plus, Redo, ReplaceIcon, Simplify, Trash, TypeIcon, Undo } from './icons.tsx';
+import { Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
@@ -94,22 +92,8 @@ export function Timeline() {
   const hasSel = selected >= 0 && !!clips[selected];
   // cheap (a pass over the strips), so it is worked out whenever they change: Simplify is greyed out when there is nothing left to tighten
   const tight = useMemo(() => optimizeLanes(clips).moved === 0, [clips]);
-  const [menu, setMenu] = useState(false);
-  const [menuUp, setMenuUp] = useState(true);
   const [pps, setPps] = useState(36); // pixels per second
   const [move, setMove] = useState<Move | null>(null);
-  // the open menu is put away by a touch anywhere else, and that same touch goes on to what is underneath (a swipe on the timeline still scrolls it)
-  useEffect(() => {
-    if (!menu) return;
-    const away = (e: PointerEvent) => {
-      if ((e.target as Element | null)?.closest?.('.add-menu, .tl-add')) return;
-      setMenu(false);
-      setKind(null);
-    };
-    window.addEventListener('pointerdown', away, true);
-    return () => window.removeEventListener('pointerdown', away, true);
-  }, [menu]);
-  const [kind, setKind] = useState<'end' | 'playhead' | 'time' | 'replace' | null>(null);
   const [trim, setTrim] = useState<Trim | null>(null);
   // edit mode: dragging the picked strip sideways slides the picture inside it (the strip keeps its place and length)
   const slipRef = useRef<{ id: number; i: number; x0: number; y0: number; base: { start: number; end: number }; active: boolean; cur: { start: number; end: number } } | null>(null);
@@ -247,13 +231,16 @@ export function Timeline() {
 
   /** tapping a strip: the position slides to its start while the zoom changes so the strip fills the middle half (25% to 75%) of the width */
   const glide = useRef(0);
-  const glideTo = (index: number) => {
+  const tapped = useRef<string | null>(null);
+  const tapTimer = useRef(0);
+  const tapWait = useStore((s) => s.tapWait);
+  const glideTo = (index: number, zoom: boolean) => {
     const c = live.current.clips[index];
     if (!c) return;
     const t1 = c.at;
-    const p1 = Math.max(MIN_PPS, Math.min(MAX_PPS, (0.5 * viewW) / Math.max(0.05, clipDuration(c))));
-    const t0 = getState().playhead;
     const p0 = live.current.pps;
+    const p1 = zoom ? Math.max(MIN_PPS, Math.min(MAX_PPS, (0.5 * viewW) / Math.max(0.05, clipDuration(c)))) : p0;
+    const t0 = getState().playhead;
     const T = 300;
     const start = performance.now();
     cancelAnimationFrame(glide.current);
@@ -881,7 +868,6 @@ export function Timeline() {
   const laneTap = (e: MouseEvent, track: number) => {
     if (swallow.current || e.target !== e.currentTarget) return;
     if (getState().gap?.lane) return; // the picked lane handles its own tap
-    setMenu(false);
     const el = scroller.current;
     if (!el) return;
     const x = e.clientX - el.getBoundingClientRect().left + el.scrollLeft;
@@ -983,82 +969,6 @@ export function Timeline() {
           {playing ? <Pause /> : <Play />}
         </button>
         <div class="tl-left">
-          <button class={`tl-add ${menu ? 'on' : ''}`} aria-haspopup="menu" aria-expanded={menu} onClick={(e) => {
-              // the menu opens on the side with more room: above the bar (the preview) or below it (the lanes)
-              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              const tab = (document.querySelector('.tabbar') as HTMLElement | null)?.offsetHeight ?? 56;
-              setMenuUp(r.top > window.innerHeight - r.bottom - tab);
-              if (menu) setKind(null);
-              setMenu(!menu);
-            }}>
-            <Plus /> <span>Add</span>
-          </button>
-          {menu && (
-            <>
-              <div class={`add-menu ${menuUp ? 'up' : 'down'}`} role="menu">
-                {!kind ? (
-                  <>
-                    {(
-                      [
-                        ['end', 'After last strip', <AfterIcon size={18} />],
-                        ['time', 'On current time', <ClockIcon size={18} />],
-                        ['playhead', 'As layers', <LayersIcon size={18} />],
-                        ['replace', 'Replace selected', <ReplaceIcon size={18} />],
-                      ] as const
-                    ).map(([mode, name, icon]) => {
-                      const off = mode === 'replace' && !(selected >= 0 && multi.length === 0);
-                      return (
-                        <button key={mode} role="menuitem" disabled={off} onClick={() => setKind(mode)}>
-                          {icon}
-                          {name}
-                        </button>
-                      );
-                    })}
-                    <button role="menuitem" onClick={() => (setMenu(false), setKind(null), void startRecording())}>
-                      <MicIcon size={18} />
-                      Record audio
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button role="menuitem" class="add-back" onClick={() => setKind(null)}>
-                      ‹ Back
-                    </button>
-                    {(['media', 'text', 'color', 'clipboard'] as const).map((k) => {
-                      const name = k === 'media' ? 'Media' : k === 'text' ? 'Text' : k === 'color' ? 'Color' : 'Clipboard';
-                      const icon = k === 'media' ? <ImageIcon size={18} /> : k === 'text' ? <TypeIcon size={18} /> : k === 'color' ? <PaletteIcon size={18} /> : <PasteIcon size={18} />;
-                      const done = () => (setMenu(false), setKind(null));
-                      if (k === 'media')
-                        return (
-                          <PickLabel key={k} class="add-item" label="Add videos, pictures or sound" mode={kind}>
-                            <span class="add-row" onClick={() => window.setTimeout(done, 600)}>
-                              {icon}
-                              {name}
-                            </span>
-                          </PickLabel>
-                        );
-                      return (
-                        <button
-                          key={k}
-                          role="menuitem"
-                          onClick={() => {
-                            done();
-                            engine.pause();
-                            if (k === 'text') void addTextClip(kind);
-                            else if (k === 'color') void addSolid('#2f6fed', kind);
-                            else void pasteClipboard(kind);
-                          }}
-                        >
-                          {icon}
-                          {name}
-                        </button>
-                      );
-                    })}
-                  </>
-                )}
-              </div>
-            </>
-          )}
         </div>
         {!hasSel && !gap ? (
           <button class="tl-btn" disabled={tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
@@ -1169,7 +1079,7 @@ export function Timeline() {
               const audio = isAudio(m);
               const w = Math.max(14, ((end - start) / c.speed) * pps);
               const inMulti = multi.includes(c.id);
-              const on = multi.length > 0 ? inMulti : i === selected;
+              const on = multi.length > 0 ? inMulti : i === selected && !tapWait;
               const baking = bakes[keyOf(c)];
               const wave = audio ? waves[c.mediaId] : undefined;
               return (
@@ -1187,9 +1097,24 @@ export function Timeline() {
                   onClick={() => {
                     if (swallow.current) return;
                     engine.pause();
-                    if (getState().multi.length > 0) toggleMulti(i);
-                    else if (on) (say(getState().handles ? 'Select mode' : 'Edit mode'), set({ handles: !getState().handles }));
-                    else (selectClip(i, { keepPlayhead: true }), glideTo(i));
+                    if (getState().multi.length > 0) return toggleMulti(i);
+                    // a second tap on the same strip within the window is a double tap: zoom so it spans the middle half of the timeline
+                    if (tapped.current === c.id) {
+                      tapped.current = null;
+                      clearTimeout(tapTimer.current);
+                      endTapWait();
+                      if (getState().selected !== i) selectClip(i, { keepPlayhead: true });
+                      return glideTo(i, true);
+                    }
+                    tapped.current = c.id;
+                    armTapWait();
+                    if (!on) (selectClip(i, { keepPlayhead: true }), glideTo(i, false));
+                    // tapping the picked strip swaps select and edit mode, once it is clear that no second tap follows
+                    clearTimeout(tapTimer.current);
+                    tapTimer.current = window.setTimeout(() => {
+                      tapped.current = null;
+                      if (on && getState().selected === i) (say(getState().handles ? 'Select mode' : 'Edit mode'), set({ handles: !getState().handles }));
+                    }, DOUBLE_MS);
                   }}
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}

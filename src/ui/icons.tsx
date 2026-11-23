@@ -257,3 +257,10 @@ export const MicIcon = ({ size }: { size?: number }) => (
     <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
   </I>
 );
+export const ImportIcon = ({ size }: { size?: number }) => (
+  <I size={size}>
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M4 17v3h16v-3" />
+  </I>
+);
