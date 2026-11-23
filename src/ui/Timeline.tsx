@@ -10,7 +10,8 @@ import type { Clip, MediaInfo } from '../types.ts';
 import { PickLabel } from './Picker.tsx';
 import { aim } from '../dropAim.ts';
 import { Pie } from './Pie.tsx';
-import { AfterIcon, ClockIcon, Copy, GapH, ImageIcon, LayersIcon, PaletteIcon, Pause, PasteIcon, Play, Plus, Redo, ReplaceIcon, Simplify, Trash, TypeIcon, Undo } from './icons.tsx';
+import { startRecording } from '../recorder.ts';
+import { MicIcon, AfterIcon, ClockIcon, Copy, GapH, ImageIcon, LayersIcon, PaletteIcon, Pause, PasteIcon, Play, Plus, Redo, ReplaceIcon, Simplify, Trash, TypeIcon, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
@@ -1013,6 +1014,10 @@ export function Timeline() {
                         </button>
                       );
                     })}
+                    <button role="menuitem" onClick={() => (setMenu(false), setKind(null), void startRecording())}>
+                      <MicIcon size={18} />
+                      Record audio
+                    </button>
                   </>
                 ) : (
                   <>

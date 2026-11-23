@@ -18,6 +18,7 @@ import { aim } from '../dropAim.ts';
 import { isAudioFile } from '../media.ts';
 import { Timeline } from './Timeline.tsx';
 import { browserInfo, checkSupport } from '../support.ts';
+import { stopRecording, recordingSeconds, useRecording } from '../recorder.ts';
 import qrcode from 'qrcode-generator';
 
 const support = checkSupport();
@@ -283,6 +284,7 @@ export function App() {
   return (
     <div class={`app ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
       <FilePicker />
+      <RecordBar />
       {locked && <div class="lock-veil" />}
 
       {busy && !hasClips && <div class="busy">{busy}</div>}
@@ -374,6 +376,27 @@ function Empty({ onEnter }: { onEnter: () => void }) {
       {steps && <InstallSteps onClose={() => setSteps(false)} />}
       {qr && <PhoneCode onClose={() => setQr(false)} />}
     </main>
+  );
+}
+
+function RecordBar() {
+  const on = useRecording();
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!on) return;
+    const i = window.setInterval(() => tick((n) => n + 1), 200);
+    return () => window.clearInterval(i);
+  }, [on]);
+  if (!on) return null;
+  const s = recordingSeconds();
+  return (
+    <div class="rec-bar" role="status">
+      <span class="rec-dot" />
+      <span>Recording {Math.floor(s / 60)}:{String(Math.floor(s % 60)).padStart(2, '0')}</span>
+      <button class="cta" onClick={stopRecording}>
+        Stop
+      </button>
+    </div>
   );
 }
 

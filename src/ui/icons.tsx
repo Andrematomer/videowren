@@ -251,3 +251,9 @@ export const ReplaceIcon = ({ size }: { size?: number }) => (
     <rect x="3" y="14" width="7" height="7" rx="1" />
   </I>
 );
+export const MicIcon = ({ size }: { size?: number }) => (
+  <I size={size}>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
+  </I>
+);
