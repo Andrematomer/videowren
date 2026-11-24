@@ -6,21 +6,28 @@ let rec: MediaRecorder | null = null;
 let stream: MediaStream | null = null;
 let chunks: Blob[] = [];
 let t0 = 0;
+let acc = 0;
 let taken = 0;
+/** the recorder panel is open (waiting for the person to start) */
+let armed = false;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((f) => f());
 
-export const recordingSeconds = (): number => (rec ? (performance.now() - t0) / 1000 : 0);
+/** seconds recorded so far (a pause does not count) */
+export const recordingSeconds = (): number => (rec ? acc + (rec.state === 'recording' ? (performance.now() - t0) / 1000 : 0) : 0);
 
-export function useRecording(): boolean {
+export type RecState = { armed: boolean; state: 'idle' | 'recording' | 'paused' };
+export function useRecorder(): RecState {
   const [, tick] = useState(0);
   useEffect(() => {
     const f = () => tick((n) => n + 1);
     listeners.add(f);
     return () => void listeners.delete(f);
   }, []);
-  return rec !== null;
+  return { armed: armed || rec !== null, state: rec ? (rec.state === 'paused' ? 'paused' : 'recording') : 'idle' };
 }
+export const armRecorder = (): void => ((armed = true), emit());
+export const disarmRecorder = (): void => ((armed = false), emit());
 
 /** iPhone: while the microphone is in use the system treats the app like a phone call (quiet, earpiece). The audio session is put back to playing afterwards. */
 type AudioSession = { type: string };
@@ -66,29 +73,44 @@ export async function startRecording(): Promise<boolean> {
     chunks = [];
     release();
     rec = null;
+    armed = false;
     emit();
     if (blob.size < 200) return void toast('Nothing was recorded.');
     set({ tray: [new File([blob], `Recording ${++taken}.${ext}`, { type })] });
   };
   rec = r;
   t0 = performance.now();
+  acc = 0;
   r.start(250);
   emit();
   return true;
 }
 
+export function pauseRecording(): void {
+  if (!rec || rec.state !== 'recording') return;
+  acc += (performance.now() - t0) / 1000;
+  rec.pause();
+  emit();
+}
+export function resumeRecording(): void {
+  if (!rec || rec.state !== 'paused') return;
+  t0 = performance.now();
+  rec.resume();
+  emit();
+}
 export function stopRecording(): void {
   if (rec && rec.state !== 'inactive') rec.stop();
 }
 
 /** leaves without keeping the take */
 export function cancelRecording(): void {
-  if (!rec) return;
+  if (!rec) return void disarmRecorder();
   const r = rec;
   r.onstop = () => {
     chunks = [];
     release();
     rec = null;
+    armed = false;
     emit();
   };
   if (r.state !== 'inactive') r.stop();

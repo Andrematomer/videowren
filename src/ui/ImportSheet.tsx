@@ -3,7 +3,7 @@ import { dragCtl, lift, showDropPreview } from '../dropAim.ts';
 import { engine } from '../engine.ts';
 import { isAudioFile, isImageFile } from '../media.ts';
 import { addSolid, addTextClip, importFiles, pasteClipboard, set, toast, useStore } from '../store.ts';
-import { cancelRecording, recordingSeconds, startRecording, stopRecording, useRecording } from '../recorder.ts';
+import { armRecorder, cancelRecording, pauseRecording, recordingSeconds, resumeRecording, startRecording, stopRecording, useRecorder } from '../recorder.ts';
 import { ImageIcon, MicIcon, PaletteIcon, PasteIcon, TypeIcon } from './icons.tsx';
 import { PickLabel } from './Picker.tsx';
 import { Sheet } from './Sheet.tsx';
@@ -17,7 +17,7 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).p
  */
 export function ImportSheet({ onClose }: { onClose: () => void }) {
   const tray = useStore((s) => s.tray);
-  const recording = useRecording();
+  const recording = useRecorder().armed;
   return (
     <Sheet title="Import" onClose={onClose}>
       {recording ? <Recorder /> : tray.length > 0 ? <Tray files={tray} /> : <Choices onDone={onClose} />}
@@ -45,7 +45,7 @@ function Choices({ onDone }: { onDone: () => void }) {
         <PaletteIcon size={22} />
         <span>Color</span>
       </button>
-      <button class="import-item" role="menuitem" onClick={go(() => void startRecording())}>
+      <button class="import-item" role="menuitem" onClick={go(armRecorder)}>
         <MicIcon size={22} />
         <span>Record audio</span>
       </button>
@@ -58,6 +58,7 @@ function Choices({ onDone }: { onDone: () => void }) {
 }
 
 function Recorder() {
+  const { state } = useRecorder();
   const [, tick] = useState(0);
   useEffect(() => {
     const i = window.setInterval(() => tick((n) => n + 1), 200);
@@ -65,18 +66,30 @@ function Recorder() {
   }, []);
   return (
     <div class="recorder">
-      <div class="rec-time num">
+      <div class={`rec-time num ${state}`}>
         <span class="rec-dot" />
         {fmt(recordingSeconds())}
       </div>
-      <p>Recording. Nothing plays meanwhile, so only your voice is recorded.</p>
       <div class="rec-actions">
-        <button class="cta ghost" onClick={cancelRecording}>
-          Cancel
-        </button>
-        <button class="cta" onClick={stopRecording}>
-          Stop
-        </button>
+        {state === 'idle' ? (
+          <>
+            <button class="cta ghost" onClick={cancelRecording}>
+              Cancel
+            </button>
+            <button class="cta" onClick={() => void startRecording()}>
+              Record
+            </button>
+          </>
+        ) : (
+          <>
+            <button class="cta ghost" onClick={state === 'paused' ? resumeRecording : pauseRecording}>
+              {state === 'paused' ? 'Resume' : 'Pause'}
+            </button>
+            <button class="cta" onClick={stopRecording}>
+              Stop
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -94,9 +107,30 @@ function Tray({ files }: { files: File[] }) {
   const kinds = useMemo(() => files.map((f) => isAudioFile(f)), [files]);
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null);
   // the panel steps aside while the card is carried, so the whole timeline and the preview can be seen
+  // (it comes back a moment after the drop, not at once: the drop closes the tab, and that must not be seen as a panel sliding out)
   useEffect(() => {
-    document.documentElement.classList.toggle('tray-drag', !!drag);
-    return () => document.documentElement.classList.remove('tray-drag');
+    const cl = document.documentElement.classList;
+    if (drag) return void cl.add('tray-drag');
+    const id = window.setTimeout(() => cl.remove('tray-drag'), 450);
+    return () => clearTimeout(id);
+  }, [!!drag]);
+  useEffect(() => () => document.documentElement.classList.remove('tray-drag'), []);
+  // while the card is carried, no other finger works on the app (a second finger zooming the timeline left the outline behind)
+  useEffect(() => {
+    if (!drag) return;
+    const block = (e: Event) => {
+      const id = (e as PointerEvent).pointerId;
+      if (e.type === 'touchstart' ? (e as TouchEvent).touches.length < 2 : id === undefined || id === st.current?.id) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    const opts = { capture: true, passive: false } as const;
+    window.addEventListener('pointerdown', block, opts);
+    window.addEventListener('touchstart', block, opts);
+    return () => {
+      window.removeEventListener('pointerdown', block, opts);
+      window.removeEventListener('touchstart', block, opts);
+    };
   }, [!!drag]);
   const st = useRef<{ id: number; x: number; y: number; on: boolean } | null>(null);
   const shown = files.slice(0, 4);

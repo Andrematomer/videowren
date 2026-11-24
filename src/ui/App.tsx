@@ -16,7 +16,7 @@ import { Drawer, TabBar } from './Drawer.tsx';
 import { SettingsSheet } from './SettingsSheet.tsx';
 import { saveFrame } from '../frame.ts';
 import { aim, dragCtl, lift, showDropPreview, whereAt } from '../dropAim.ts';
-import { isAudioFile } from '../media.ts';
+import { isAudioFile, isImageFile } from '../media.ts';
 import { Timeline } from './Timeline.tsx';
 import { browserInfo, checkSupport } from '../support.ts';
 import qrcode from 'qrcode-generator';
@@ -64,6 +64,12 @@ export function App() {
   const shownSheet = sheet !== 'none' ? sheet : lastSheet;
   const busy = useStore((s) => s.busy);
   const [aimAt, setAimAt] = useState<{ x: number; y: number } | null>(null);
+  const [aimPt, setAimPt] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const f = (e: Event) => setAimPt((e as CustomEvent<{ x: number; y: number } | null>).detail);
+    window.addEventListener('pc-aim-pt', f);
+    return () => window.removeEventListener('pc-aim-pt', f);
+  }, []);
   const toast = useStore((s) => s.toast);
   const [tlH, setTlH] = useState(() => {
     try {
@@ -77,19 +83,84 @@ export function App() {
     void restore();
   }, []);
 
-  // drag files onto the page: over a timeline lane that lane lights up and the files follow one another on it (held on the
-  // top or bottom lane, more lanes open); over the preview area they go on the yellow line, each on its own layer
+  // iPhone: coming back from the app switcher can leave the page shifted up (the bottom tabs cut off). When the app is shown again the page is put back
+  // and its size is worked out afresh.
+  useEffect(() => {
+    const fix = () => {
+      window.scrollTo(0, 0);
+      const a = document.querySelector('.app') as HTMLElement | null;
+      if (!a) return;
+      a.style.height = 'calc(100% + 0.5px)';
+      requestAnimationFrame(() => (a.style.height = ''));
+    };
+    const back = () => {
+      if (document.visibilityState === 'hidden') return;
+      fix();
+      window.setTimeout(fix, 250);
+      window.setTimeout(fix, 900);
+    };
+    document.addEventListener('visibilitychange', back);
+    window.addEventListener('pageshow', back);
+    window.addEventListener('focus', back);
+    return () => {
+      document.removeEventListener('visibilitychange', back);
+      window.removeEventListener('pageshow', back);
+      window.removeEventListener('focus', back);
+    };
+  }, []);
+
+  // Files dragged in from outside (Files, Photos, another window) cover the whole page with a drop area: where exactly they would land is not
+  // known while they are in the air (iPhone does not say how many there are before they are let go), so they are let go anywhere and then
+  // wait in the Import tab, from where they are dragged to a place like anything else.
+  const [dropping, setDropping] = useState(false);
   useEffect(() => {
     const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+    let idle = 0;
+    const off = () => (clearTimeout(idle), setDropping(false));
+    const over = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      setDropping(true);
+      clearTimeout(idle);
+      idle = window.setTimeout(off, 2500); // the system ended the drag without telling the page
+    };
+    const leave = (e: DragEvent) => {
+      if (!e.relatedTarget) off();
+    };
+    const drop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      off();
+      const files = [...(e.dataTransfer?.files ?? [])].filter((f) => /^(image|video|audio)\//.test(f.type) || isImageFile(f) || isAudioFile(f));
+      if (files.length === 0) return;
+      setEntered(true);
+      set({ tray: files, sheet: 'import', drawer: null, selected: -1, multi: [], gap: null });
+    };
+    window.addEventListener('dragenter', over);
+    window.addEventListener('dragover', over);
+    window.addEventListener('dragleave', leave);
+    window.addEventListener('drop', drop);
+    window.addEventListener('dragend', off);
+    window.addEventListener('touchstart', off, { passive: true });
+    return () => {
+      off();
+      window.removeEventListener('dragenter', over);
+      window.removeEventListener('dragover', over);
+      window.removeEventListener('dragleave', leave);
+      window.removeEventListener('drop', drop);
+      window.removeEventListener('dragend', off);
+      window.removeEventListener('touchstart', off);
+    };
+  }, []);
+
+  // the drag of the card in the Import tab (pointer events): the outlines show where it would land, and a finger held at the edge scrolls the timeline
+  useEffect(() => {
     let lit: Element | null = null;
     let stage: Element | null = null;
     let pos = { x: 0, y: 0 };
     let edge: { side: string; since: number } | null = null;
     let timer = 0;
     let kindsOf: boolean[] = [];
-    let lastEvent = 0;
-    /** the drag comes from the Import tab (pointer events): it ends with its own finger, never by a silence timeout */
-    let own = false;
     const where = () => whereAt(pos.x, pos.y);
     const clear = () => {
       lit?.classList.remove('target');
@@ -105,7 +176,6 @@ export function App() {
         stage = w.lane ? null : w.stage;
         stage?.classList.add('drop-on');
       }
-      // the yellow outlines in the timeline show where the files would land (nothing is lit up any more)
       const kinds = kindsOf.length ? kindsOf : [false];
       showDropPreview(w.lane ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'stage' } : null);
       setAimAt(w.lane || w.stage ? { x: pos.x, y: pos.y } : null);
@@ -126,50 +196,14 @@ export function App() {
       edge = null;
       kindsOf = [];
       clear();
-      own = false;
       showDropPreview(null);
       setAimAt(null);
       window.dispatchEvent(new CustomEvent('pc-lanes', { detail: 'reset' }));
     };
-    const over = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      pos = { x: e.clientX, y: e.clientY };
-      lastEvent = performance.now();
-      // one entry per dragged item (some browsers report the kind of an item as something else than 'file' while it is still in the air)
-      const it = e.dataTransfer?.items;
-      const n = Math.max(it?.length ?? 0, kindsOf.length);
-      kindsOf = Array.from({ length: n }, (_, i) => !!it?.[i]?.type?.startsWith('audio/'));
-      update();
-      // a drag that stands still sends no events. If the system ended the drag without telling the page (a second finger on the screen does that on
-      // iPhone), nothing arrives any more: then the outlines go away instead of staying for good
-      if (!timer) timer = window.setInterval(() => (!own && performance.now() - lastEvent > 2500 ? stop() : update()), 150);
-    };
-    const leave = (e: DragEvent) => {
-      if (!e.relatedTarget) stop();
-    };
-    const drop = (e: DragEvent) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      pos = { x: e.clientX, y: e.clientY };
-      const files = [...(e.dataTransfer?.files ?? [])];
-      const w = where();
-      const target = aim.value ? { ...aim.value } : null;
-      // the outlines stay until the files are read and their strips appear
-      const done = () => showDropPreview(null);
-      stop();
-      if (w.lane && target) {
-        showDropPreview({ x: pos.x, y: pos.y - lift(), kinds: files.map((f) => isAudioFile(f)), mode: 'lane' });
-        void importFiles(files, 'time', { track: target.track, at: target.at }).finally(done);
-      } else if (w.stage) void importFiles(files, 'playhead');
-      else void importFiles(files);
-    };
     dragCtl.cur = {
       move: (x, y, kinds) => {
-        own = true;
         pos = { x, y };
         kindsOf = kinds;
-        lastEvent = performance.now();
         update();
         if (!timer) timer = window.setInterval(update, 150);
       },
@@ -182,32 +216,15 @@ export function App() {
         timer = 0;
         edge = null;
         kindsOf = [];
-        own = false;
         clear();
         setAimAt(null);
         return r;
       },
-      cancel: () => stop(),
+      cancel: stop,
     };
-    window.addEventListener('dragenter', over);
-    window.addEventListener('dragover', over);
-    window.addEventListener('dragleave', leave);
-    window.addEventListener('drop', drop);
-    window.addEventListener('dragend', stop);
-    // another finger touching the screen while files are being dragged: the drag is over as far as the page is concerned
-    const touched = () => timer && !own && stop();
-    window.addEventListener('touchstart', touched, { passive: true });
-    window.addEventListener('pointerdown', touched, { passive: true });
     return () => {
-      window.removeEventListener('touchstart', touched);
-      window.removeEventListener('pointerdown', touched);
       stop();
       dragCtl.cur = null;
-      window.removeEventListener('dragenter', over);
-      window.removeEventListener('dragover', over);
-      window.removeEventListener('dragleave', leave);
-      window.removeEventListener('drop', drop);
-      window.removeEventListener('dragend', stop);
     };
   }, []);
 
@@ -321,7 +338,13 @@ export function App() {
   return (
     <div class={`app ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
       <FilePicker />
-      {aimAt && lift() > 0 && <div class="aim-line" style={{ left: `${aimAt.x}px`, top: `${aimAt.y - lift()}px`, height: `${lift()}px` }} />}
+      {dropping && <div class="drop-veil"><span>Drop to import</span></div>}
+      {aimAt && lift() > 0 && (
+        <svg class="aim-line" aria-hidden="true">
+          <line x1={aimPt?.x ?? aimAt.x} y1={aimPt?.y ?? aimAt.y - lift()} x2={aimAt.x} y2={aimAt.y} />
+          <circle cx={aimAt.x} cy={aimAt.y} r="5.5" />
+        </svg>
+      )}
       {locked && <div class="lock-veil" />}
 
       {busy && !hasClips && <div class="busy">{busy}</div>}
@@ -439,7 +462,7 @@ function PhoneCode({ onClose }: { onClose: () => void }) {
 function InstallSteps({ onClose }: { onClose: () => void }) {
   const body = isIOS ? (
     <ol>
-      <li>Tap the Share button (the square with an arrow).</li>
+      <li>Open the Share menu of the browser (look for Share; in some versions it is inside a menu first).</li>
       <li>Scroll down and choose Add to Home Screen, then Add.</li>
       <li>If you don't see Add to Home Screen, this browser may not allow it. Open this page in Safari and try again.</li>
     </ol>

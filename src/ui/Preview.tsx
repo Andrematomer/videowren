@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { engine } from '../engine.ts';
 import { endFine as hudEndFine, hide, hold, release as releaseHud, say, startFine } from '../hud.ts';
 import { type Rect, baseScale, clampView, fitSegment, shownBox, tapCell, clampZoom, dragView, fitZoom, normAngle, outputSize, pinchView, snapEightCropped, snapView, snapViewCropped, type Pt } from '../geometry.ts';
-import { DOUBLE_MS, armTapWait, endTapWait, resetTransform, deselect, getState, selectClip, set, setCrop, setMulti, setViews, toggleMulti, updateClip, useStore } from '../store.ts';
+import { DOUBLE_MS, resetTransform, deselect, getState, selectClip, set, setCrop, setMulti, setViews, toggleMulti, updateClip, useStore } from '../store.ts';
 import { localPoint } from '../turn.ts';
 import { activeAt, fmtTime, totalOf } from '../timeline.ts';
 import type { Clip, Crop, View } from '../types.ts';
@@ -13,7 +13,6 @@ export function Preview() {
   const project = useStore((s) => s.project);
   const selected = useStore((s) => s.selected);
   const busy = useStore((s) => s.busy);
-  const tapWait = useStore((s) => s.tapWait);
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -96,8 +95,8 @@ export function Preview() {
       <div class="frame" style={{ width: `${box.w}px`, height: `${box.h}px` }}>
         <canvas ref={canvas} style={{ width: `${box.w}px`, height: `${box.h}px` }} />
         {box.w > 0 && <Gestures boxW={box.w} boxH={box.h} />}
-        {box.w > 0 && clip && media && !tapWait && <TransformBox boxW={box.w} boxH={box.h} />}
-        {box.w > 0 && !tapWait && <GroupBox boxW={box.w} boxH={box.h} />}
+        {box.w > 0 && clip && media && <TransformBox boxW={box.w} boxH={box.h} />}
+        {box.w > 0 && <GroupBox boxW={box.w} boxH={box.h} />}
         {busy && <div class="overlay-note">{busy}</div>}
         {box.w > 0 && <BuildPies boxW={box.w} boxH={box.h} />}
       </div>
@@ -135,7 +134,7 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   if (!key) return null;
   const st = getState();
   return (
-    <>
+    <div class="build-layer">
       {key.split(';').map((k) => {
         const [is, p] = k.split(',');
         const i = Number(is);
@@ -154,16 +153,19 @@ function BuildPies({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
         const fs = Math.min(w * 0.12, h * 0.16);
         if (fs < 5) return null;
         return (
-          <span key={c.id} class="build-note" style={{ left: `${x}px`, top: `${y}px`, fontSize: `${fs}px`, transform: `translate(-50%, -50%) rotate(${rot}deg)` }}>
-            generating
-            <br />
-            preview
-            <br />
-            {p}%
-          </span>
+          // the note is cut off where the picture is (and where the canvas ends): the part of a picture outside the canvas has no note
+          <div key={c.id} class="build-clip" style={{ left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px`, transform: `translate(-50%, -50%) rotate(${rot}deg)` }}>
+            <span class="build-note" style={{ fontSize: `${fs}px` }}>
+              generating
+              <br />
+              preview
+              <br />
+              {p}%
+            </span>
+          </div>
         );
       })}
-    </>
+    </div>
   );
 }
 
@@ -220,8 +222,6 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   const timer = useRef(0);
   const cropTimer = useRef(0);
   const holdTimer = useRef(0);
-  const modeSay = useRef(0);
-  const tapMode = useRef<boolean | null>(null);
   const autoPicked = useRef(false);
   const frame = useRef(0);
   const sizes = useRef({ boxW, boxH });
@@ -499,17 +499,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     if (i < 0) return deselect();
     if (st0.multi.length > 0) return toggleMulti(i);
     if (i !== st0.selected) return selectClip(i, { keepPlayhead: true });
-    // tapping the picked picture again swaps select mode and edit mode (the timeline strip follows)
-    // the swap waits for the end of the double-tap window, so a double tap never flashes the other mode
-    swapMode();
-  };
-  const swapMode = () => {
-    const edit = !getState().handles;
-    clearTimeout(modeSay.current);
-    modeSay.current = window.setTimeout(() => {
-      set({ handles: edit });
-      say(edit ? 'Edit mode' : 'Select mode');
-    }, DOUBLE_MS + 20);
+    // tapping the picked picture again does nothing: select mode and edit mode are switched with the button in the middle bar
   };
   /** a finger held still on empty canvas or on a strip that is not the picked one starts (or grows) a multi-selection */
   const holdPick = (cx: number, cy: number, selBefore: number) => {
@@ -906,7 +896,6 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
       const lt = lastTap.current;
       if (lt && tp.t - lt.t < DOUBLE_MS + 60 && Math.hypot(tp.x - lt.x, tp.y - lt.y) < 40) {
         lastTap.current = null;
-        endTapWait();
         clearTimeout(cropTimer.current);
         // a double tap works on what was selected before it: the first touch of the pair must not have switched the selection
         if (lt.prevMulti.length > 0) setMulti(lt.prevMulti);
@@ -922,12 +911,10 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
           // a double tap then works on that picture (it stays picked), in select mode
           lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev: getState().selected, prevMulti: [], prevHandles: false };
           autoPicked.current = false;
-          if (getState().selected >= 0) armTapWait();
           return;
         }
         pickAt(tp.x, tp.y);
         lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev, prevMulti, prevHandles };
-        if (getState().selected >= 0 && getState().multi.length === 0) armTapWait();
       }
     }
   };
@@ -1011,7 +998,6 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
   const doubleTap = (cx: number, cy: number) => {
     void cx;
     void cy;
-    clearTimeout(modeSay.current);
     hapticDouble();
     const members = groupMembers();
     const { boxW: W, boxH: H } = sizes.current;
@@ -1043,17 +1029,8 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     window.setTimeout(() => !fine.current && showBadge(''), 700);
   };
   useEffect(() => {
-    handleDouble = () => {
-      // the first tap of this double tap may already have swapped the mode (slow second tap): undo that first
-      if (tapMode.current !== null && getState().handles !== tapMode.current) set({ handles: tapMode.current });
-      tapMode.current = null;
-      doubleTap(0, 0);
-    };
-    handleSingle = () => {
-      if (getState().multi.length > 0) return;
-      tapMode.current = getState().handles;
-      swapMode();
-    };
+    handleDouble = () => doubleTap(0, 0);
+    handleSingle = null;
     return () => {
       handleDouble = null;
       handleSingle = null;

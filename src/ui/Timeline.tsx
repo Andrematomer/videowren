@@ -3,13 +3,13 @@ import { keyOf } from '../bake.ts';
 import { engine } from '../engine.ts';
 import { thumbUrl } from '../media.ts';
 import { hold, release as releaseHud, say } from '../hud.ts';
-import { DOUBLE_MS, armTapWait, endTapWait, optimizeWithFeedback, pasteClipboard, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
+import { DOUBLE_MS, optimizeWithFeedback, pasteClipboard, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
 import { PEAKS_PER_SEC } from '../wave.ts';
 import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, stackTracks, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
 import { aim } from '../dropAim.ts';
 import { Pie } from './Pie.tsx';
-import { Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
+import { CropMode, Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
@@ -184,6 +184,48 @@ export function Timeline() {
     window.addEventListener('pc-drop-preview', prev);
     return () => window.removeEventListener('pc-drop-preview', prev);
   }, []);
+  // a finger held at the left or right edge while the card from the Import tab is carried scrolls the timeline, like moving a strip
+  useEffect(() => {
+    let last: { x: number } | null = null;
+    let raf = 0;
+    let redo = false;
+    const tick = () => {
+      raf = 0;
+      const el = scroller.current;
+      if (!last || !el) return;
+      const r = el.getBoundingClientRect();
+      let vx = 0;
+      if (last.x < r.left + EDGE) vx = -Math.ceil(((r.left + EDGE - last.x) / EDGE) * 14);
+      else if (last.x > r.right - EDGE) vx = Math.ceil(((last.x - (r.right - EDGE)) / EDGE) * 14);
+      if (vx) {
+        el.scrollLeft += vx;
+        redo = true; // the outlines are worked out again for the new scroll position
+        window.dispatchEvent(new CustomEvent('pc-drop-preview', { detail: last }));
+        redo = false;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    const on = (e: Event) => {
+      if (redo) return;
+      last = (e as CustomEvent<{ x: number } | null>).detail;
+      if (!last) return void (cancelAnimationFrame(raf), (raf = 0));
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+    window.addEventListener('pc-drop-preview', on);
+    return () => {
+      window.removeEventListener('pc-drop-preview', on);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
+  // where the first outline sits on the screen (its bottom left corner): the line from the finger ends there
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const g = document.querySelector('.drop-ghost');
+      const r = g?.getBoundingClientRect();
+      window.dispatchEvent(new CustomEvent('pc-aim-pt', { detail: r ? { x: r.left, y: r.bottom } : null }));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [ghosts]);
   const lanes = lanesFor(clips, ext);
   // auto: every lane that is shown fits the height of the timeline (between half and double the normal height)
   const autoScale = Math.min(2, Math.max(0.5, ((viewH - RULER - 6) / lanes.length - GAP) / ROW0));
@@ -233,7 +275,6 @@ export function Timeline() {
   const glide = useRef(0);
   const tapped = useRef<string | null>(null);
   const tapTimer = useRef(0);
-  const tapWait = useStore((s) => s.tapWait);
   const glideTo = (index: number, zoom: boolean) => {
     const c = live.current.clips[index];
     if (!c) return;
@@ -791,7 +832,7 @@ export function Timeline() {
 
   // ---------- trimming with the handles of the selected strip ----------
 
-  const trimRef = useRef<{ id: number; i: number; side: 'left' | 'right'; x0: number; base: { at: number; start: number; end: number }; cur: Trim; guide?: number | null } | null>(null);
+  const trimRef = useRef<{ id: number; i: number; side: 'left' | 'right'; x0: number; x: number; scroll0: number; raf: number; base: { at: number; start: number; end: number }; cur: Trim; guide?: number | null } | null>(null);
   const [trimGuide, setTrimGuide] = useState<number | null>(null);
 
   const solveTrim = (t: NonNullable<typeof trimRef.current>, dx: number): Trim => {
@@ -817,6 +858,12 @@ export function Timeline() {
     if (hitAt != null) dt = hitAt - edge0;
     t.guide = hitAt;
     if (t.side === 'left') {
+      // a picture, a color or a text has no time before its start: pulling the left edge out simply makes it longer (it always starts at 0)
+      if (m?.kind === 'image') {
+        dt = Math.max(dt, -b.at, -(dur - (b.end - b.start)) / clip.speed);
+        dt = Math.min(dt, (b.end - b.start - MIN_CLIP) / clip.speed);
+        return { index: t.i, at: b.at + dt, start: 0, end: b.end - b.start - dt * clip.speed };
+      }
       dt = Math.max(dt, -b.at, -b.start / clip.speed);
       dt = Math.min(dt, (b.end - MIN_CLIP - b.start) / clip.speed);
       return { index: t.i, at: b.at + dt, start: b.start + dt * clip.speed, end: b.end };
@@ -836,23 +883,44 @@ export function Timeline() {
     } catch {
       /* the pointer is gone */
     }
-    const t = { id: e.pointerId, i, side, x0: e.clientX, base: { at: clip.at, start: clip.start, end: clip.end }, cur: { index: i, at: clip.at, start: clip.start, end: clip.end } };
+    const t = { id: e.pointerId, i, side, x0: e.clientX, x: e.clientX, scroll0: scroller.current?.scrollLeft ?? 0, raf: 0, base: { at: clip.at, start: clip.start, end: clip.end }, cur: { index: i, at: clip.at, start: clip.start, end: clip.end } };
     trimRef.current = t;
     setTrim(t.cur);
+    t.raf = requestAnimationFrame(trimFrame);
   };
-  const trimMove = (e: PointerEvent) => {
+  /** a finger at the edge of the timeline while an edge is dragged scrolls it (the edge keeps following the finger) */
+  const trimFrame = () => {
     const t = trimRef.current;
-    if (!t || e.pointerId !== t.id) return;
-    t.cur = solveTrim(t, e.clientX - t.x0);
+    const el = scroller.current;
+    if (!t || !el) return;
+    const r = el.getBoundingClientRect();
+    let vx = 0;
+    if (t.x < r.left + EDGE) vx = -Math.ceil(((r.left + EDGE - t.x) / EDGE) * 14);
+    else if (t.x > r.right - EDGE) vx = Math.ceil(((t.x - (r.right - EDGE)) / EDGE) * 14);
+    if (vx) {
+      el.scrollLeft += vx;
+      applyTrim(t);
+    }
+    t.raf = requestAnimationFrame(trimFrame);
+  };
+  const applyTrim = (t: NonNullable<typeof trimRef.current>) => {
+    t.cur = solveTrim(t, t.x - t.x0 + ((scroller.current?.scrollLeft ?? 0) - t.scroll0));
     setTrim(t.cur);
     hold(`Trim ${fmtTime((t.cur.end - t.cur.start) / (live.current.clips[t.i]?.speed ?? 1), 2)}`);
     trimTick.current(t.guide ?? null);
     setTrimGuide(t.guide ?? null);
     engine.scrubSource(t.i, t.side === 'left' ? t.cur.start : Math.max(t.cur.start, t.cur.end - 0.05), false);
   };
+  const trimMove = (e: PointerEvent) => {
+    const t = trimRef.current;
+    if (!t || e.pointerId !== t.id) return;
+    t.x = e.clientX;
+    applyTrim(t);
+  };
   const trimUp = (e: PointerEvent) => {
     const t = trimRef.current;
     if (!t || e.pointerId !== t.id) return;
+    cancelAnimationFrame(t.raf);
     trimRef.current = null;
     releaseHud();
     setTrim(null);
@@ -968,8 +1036,19 @@ export function Timeline() {
         <button class="play" onClick={startStop} aria-label={playing ? 'Pause' : 'Play'}>
           {playing ? <Pause /> : <Play />}
         </button>
-        <div class="tl-left">
-        </div>
+        <button
+          class={`tl-btn mode ${handles && hasSel ? 'on' : ''}`}
+          disabled={!(selected >= 0 && multi.length === 0)}
+          aria-pressed={handles && selected >= 0}
+          aria-label="Edit mode: trim, crop and slide the picked strip"
+          onClick={() => {
+            const h = !getState().handles;
+            set({ handles: h });
+            say(h ? 'Edit mode' : 'Select mode');
+          }}
+        >
+          <CropMode />
+        </button>
         {!hasSel && !gap ? (
           <button class="tl-btn" disabled={tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
             <Simplify />
@@ -1079,7 +1158,7 @@ export function Timeline() {
               const audio = isAudio(m);
               const w = Math.max(14, ((end - start) / c.speed) * pps);
               const inMulti = multi.includes(c.id);
-              const on = multi.length > 0 ? inMulti : i === selected && !tapWait;
+              const on = multi.length > 0 ? inMulti : i === selected;
               const baking = bakes[keyOf(c)];
               const wave = audio ? waves[c.mediaId] : undefined;
               return (
@@ -1099,22 +1178,17 @@ export function Timeline() {
                     engine.pause();
                     if (getState().multi.length > 0) return toggleMulti(i);
                     // a second tap on the same strip within the window is a double tap: zoom so it spans the middle half of the timeline
+                    // (a single tap acts at once: it selects, and the yellow line glides to the strip)
                     if (tapped.current === c.id) {
                       tapped.current = null;
                       clearTimeout(tapTimer.current);
-                      endTapWait();
                       if (getState().selected !== i) selectClip(i, { keepPlayhead: true });
                       return glideTo(i, true);
                     }
                     tapped.current = c.id;
-                    armTapWait();
-                    if (!on) (selectClip(i, { keepPlayhead: true }), glideTo(i, false));
-                    // tapping the picked strip swaps select and edit mode, once it is clear that no second tap follows
                     clearTimeout(tapTimer.current);
-                    tapTimer.current = window.setTimeout(() => {
-                      tapped.current = null;
-                      if (on && getState().selected === i) (say(getState().handles ? 'Select mode' : 'Edit mode'), set({ handles: !getState().handles }));
-                    }, DOUBLE_MS);
+                    tapTimer.current = window.setTimeout(() => (tapped.current = null), DOUBLE_MS);
+                    if (!on) (selectClip(i, { keepPlayhead: true }), glideTo(i, false));
                   }}
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}

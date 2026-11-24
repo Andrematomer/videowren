@@ -105,7 +105,7 @@ export class PreviewEngine {
     return !!clip && !!f && f.media === clip.mediaId && Math.abs(f.t - sourceAt(clip, this.tl)) < 0.03;
   }
   private fullGen = 0;
-  private full = new Map<string, { media: string; t: number; c: CanvasImageSource & { width: number; height: number } }>();
+  private full = new Map<string, { media: string; t: number; c: CanvasImageSource & { width: number; height: number }; big: boolean }>();
   private unsettle(): void {
     this.fullOk = false;
     this.fullGen++;
@@ -123,20 +123,32 @@ export class PreviewEngine {
       if (!media || media.kind === 'image' || media.kind === 'audio' || !(this.deps.hasProxy(clip.mediaId) || this.deps.isBuilding(clip.mediaId))) continue;
       const t = sourceAt(clip, this.tl);
       const have = this.full.get(clip.id);
-      if (have && have.media === clip.mediaId && Math.abs(have.t - t) < 0.03) continue;
+      const same = !!have && have.media === clip.mediaId && Math.abs(have.t - t) < 0.03;
+      if (same && have.big) continue;
       const blob = this.deps.getBlob(clip.mediaId);
       if (!blob) continue;
       const key = `${clip.id}@${t.toFixed(3)}`;
       if (this.inflight.has(key)) continue;
       this.inflight.add(key);
+      const gen = this.fullGen;
       const building = this.deps.isBuilding(clip.mediaId);
-      const run = () => this.fullFrame(blob, media.width, media.height, t, building ? this.deps.frameLong() : 1920);
-      void (building ? this.deps.priority(run) : run()).then((c) => {
-        this.inflight.delete(key);
-        if (!c) return;
-        this.full.set(clip.id, { media: clip.mediaId, t, c });
+      const store = (c: (CanvasImageSource & { width: number; height: number }) | null, big: boolean): boolean => {
+        if (!c || gen !== this.fullGen) return false; // the position moved on meanwhile
+        this.full.set(clip.id, { media: clip.mediaId, t, c, big });
         this.draw();
-      });
+        return true;
+      };
+      void (async () => {
+        try {
+          // while the preview copy is being made: first a quick frame at preview size (the copy pauses meanwhile), then the full-size one.
+          // With a copy already there the preview is small anyway, so the full-size frame comes straight away.
+          if (building && !same) store(await this.deps.priority(() => this.fullFrame(blob, media.width, media.height, t, this.deps.frameLong())), false);
+          const run = () => this.fullFrame(blob, media.width, media.height, t, 1920);
+          store(await (building ? this.deps.priority(run) : run()), true);
+        } finally {
+          this.inflight.delete(key);
+        }
+      })();
     }
   }
   /** one frame of the original file at source time t, at most 1920 px on the long side */

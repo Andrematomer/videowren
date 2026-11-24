@@ -23,7 +23,7 @@ full-screen mode.
 
 - **Android (Chrome):** the Install button on the welcome screen, or menu → Install app.
 - **Computer (Chrome / Edge):** the install icon in the address bar, or the Install button on the welcome screen.
-- **iPhone / iPad (Safari, Edge and other browsers that offer it):** Share → Add to Home Screen. If you use it often, do this rather than keeping a
+- **iPhone / iPad (Safari, Edge and other browsers that offer it):** Share, then Add to Home Screen (the Share command can sit inside a menu first, depending on the iOS version). If you use it often, do this rather than keeping a
   normal tab: Safari deletes the stored data of websites you haven't opened for 7 days, but as far as is
   known not that of Home Screen apps.
 
@@ -96,6 +96,9 @@ MIT. See [LICENSE](LICENSE).
 
 - **Import tab** (first tab with nothing selected): Media, Text, Color, Record audio, Clipboard. Media, Clipboard and recordings wait as a card of thumbnails that is dragged onto the timeline or the preview; the outline shows the landing place and a yellow line joins it to the finger on touch screens.
 - **Record audio** records in the drawer without playing; the take appears as a card to drag. On iPhone the audio session is set back to playback afterwards.
-- **Double tap** a strip in the timeline: it zooms to span the middle half of the screen. A single tap selects (and glides the yellow line to the strip). The outline (timeline) or box (preview) hides while a second tap may follow.
+- **Double tap** a strip in the timeline: it zooms to span the middle half of the screen. A single tap acts at once (it selects and glides the yellow line to the strip). Select mode and edit mode are switched with the button at the left of the middle bar.
+- **Dropping files from outside** (Files, Photos, another window): they are let go anywhere on the page and wait in the Import tab as a card, to be dragged to a place there.
+- **Recording** starts when you press Record; Pause and Resume keep it one take.
+- Pictures, colors and texts can be made longer to the left in edit mode; a finger at the edge of the timeline scrolls it while an edge, or the Import card, is dragged.
 - **Volume** goes from 0 to 400 %.
 - While a video's preview copy is being made, the current frame is decoded at preview size (the copy pauses meanwhile), the last frame stays while seeking, and the moving light and note stay on top.

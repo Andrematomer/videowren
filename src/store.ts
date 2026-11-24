@@ -47,8 +47,6 @@ export interface State {
   slide: boolean;
   /** the selected strip shows its trim handles */
   handles: boolean;
-  /** a first tap was made and a second may follow: the selection outline / box is hidden meanwhile */
-  tapWait: boolean;
   /** files waiting in the Import tab to be dragged onto the timeline or the preview */
   tray: File[];
   /** the crop handles are shown on the preview */
@@ -117,7 +115,6 @@ let state: State = {
   locked: false,
   slide: false,
   handles: false,
-  tapWait: false,
   tray: [],
   boxMode: false,
   textEdit: null,
@@ -138,16 +135,6 @@ export const getState = (): State => state;
 
 /** the window (ms) in which a second tap makes a double tap */
 export const DOUBLE_MS = 260;
-let tapWaitTimer = 0;
-export function armTapWait(): void {
-  clearTimeout(tapWaitTimer);
-  set({ tapWait: true });
-  tapWaitTimer = window.setTimeout(() => set({ tapWait: false }), DOUBLE_MS);
-}
-export function endTapWait(): void {
-  clearTimeout(tapWaitTimer);
-  if (state.tapWait) set({ tapWait: false });
-}
 export function set(patch: Partial<State>): void {
   state = { ...state, ...patch };
   subs.forEach((f) => f());
