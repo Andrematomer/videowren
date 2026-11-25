@@ -8,8 +8,10 @@ import { PEAKS_PER_SEC } from '../wave.ts';
 import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, stackTracks, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
 import { aim } from '../dropAim.ts';
+import { LevelBar } from './LevelBar.tsx';
+import { endTake, micLevel, playTake } from '../recorder.ts';
 import { Pie } from './Pie.tsx';
-import { CropMode, Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
+import { MicIcon, CropMode, Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
@@ -73,6 +75,8 @@ export function Timeline() {
   const selected = useStore((s) => s.selected);
   const playhead = useStore((s) => s.playhead);
   const playing = useStore((s) => s.playing);
+  const micOn = useStore((s) => s.micOn);
+  const recording = useStore((s) => s.recording);
   const progress = useStore((s) => s.proxyProgress);
   const gap = useStore((s) => s.gap);
   const handles = useStore((s) => s.handles);
@@ -124,7 +128,7 @@ export function Timeline() {
     const D = 3; // the length of an outline: the real length is only known after the files are read
     let was = '';
     const prev = (e: Event) => {
-      const d = (e as CustomEvent<{ x: number; y: number; kinds: boolean[]; mode: 'lane' | 'stage' } | null>).detail;
+      const d = (e as CustomEvent<{ x: number; y: number; kinds: boolean[]; durs?: number[]; mode: 'lane' | 'stage' } | null>).detail;
       const el = scroller.current;
       const L = live.current;
       if (!d || !el) {
@@ -136,15 +140,15 @@ export function Timeline() {
       }
       if (was === 'stage' && d.mode === 'lane') setExt({ hi: 0, lo: 0 });
       was = d.mode;
-      const pseudo = (track: number, at: number): Clip => ({ id: '', mediaId: '', start: 0, end: D, speed: 1, view: { x: 0, y: 0, zoom: 1, rot: 0 }, volume: 1, keepPitch: true, at, track });
+      const pseudo = (track: number, at: number, len = D): Clip => ({ id: '', mediaId: '', start: 0, end: len, speed: 1, view: { x: 0, y: 0, zoom: 1, rot: 0 }, volume: 1, keepPitch: true, at, track });
       if (d.mode === 'stage') {
         // over the preview: every file starts at the yellow line on its own layer (open lanes are added as needed)
         aim.value = null;
         const placed: Clip[] = [];
         for (const base of [0, -1]) {
           const idx = d.kinds.map((a, i) => (a === (base === -1) ? i : -1)).filter((i) => i >= 0);
-          const tr = stackTracks(L.clips, idx.map(() => ({ at: L.playhead, dur: D })), base);
-          idx.forEach((_, k) => placed.push(pseudo(tr[k]!, L.playhead)));
+          const tr = stackTracks(L.clips, idx.map((i) => ({ at: L.playhead, dur: d.durs?.[i] ?? D })), base);
+          idx.forEach((i, k) => placed.push(pseudo(tr[k]!, L.playhead, d.durs?.[i] ?? D)));
         }
         const top = Math.max(...placed.map((c) => c.track), lanesFor(L.clips)[0]!);
         const bottom = Math.min(...placed.map((c) => c.track), lanesFor(L.clips).at(-1)!);
@@ -154,7 +158,7 @@ export function Timeline() {
           const n = { hi: Math.max(0, top - baseTop), lo: Math.max(0, baseBottom - bottom) };
           return n.hi === x.hi && n.lo === x.lo ? x : n;
         });
-        setGhosts(placed.map((c) => ({ track: c.track, at: c.at, dur: D })));
+        setGhosts(placed.map((c) => ({ track: c.track, at: c.at, dur: c.end })));
         return;
       }
       // over a lane: the first file starts under the finger (snapping to strip edges and the yellow line), the rest follow it
@@ -174,19 +178,25 @@ export function Timeline() {
       }
       at = Math.round(at * 100) / 100;
       aim.value = { track, at };
-      const group = d.kinds.map((_, i) => pseudo(track, at + i * D));
+      let cursor = at;
+      const group = d.kinds.map((_, i) => {
+        const len = d.durs?.[i] ?? D;
+        const c = pseudo(track, cursor, len);
+        cursor += len;
+        return c;
+      });
       const dir = track >= 0 ? 1 : -1;
-      const clash = (t: number) => group.some((g) => L.clips.some((o) => o.track === t && g.at < clipEnd(o) - 1e-6 && o.at < g.at + D - 1e-6));
+      const clash = (t: number) => group.some((g) => L.clips.some((o) => o.track === t && g.at < clipEnd(o) - 1e-6 && o.at < g.at + g.end - 1e-6));
       let t = track;
       for (let i = 0; i < 200 && clash(t); i++) t += dir;
-      setGhosts(group.map((g) => ({ track: t, at: g.at, dur: D })));
+      setGhosts(group.map((g) => ({ track: t, at: g.at, dur: g.end })));
     };
     window.addEventListener('pc-drop-preview', prev);
     return () => window.removeEventListener('pc-drop-preview', prev);
   }, []);
   // a finger held at the left or right edge while the card from the Import tab is carried scrolls the timeline, like moving a strip
   useEffect(() => {
-    let last: { x: number } | null = null;
+    let last: { x: number; fx?: number } | null = null;
     let raf = 0;
     let redo = false;
     const tick = () => {
@@ -195,8 +205,9 @@ export function Timeline() {
       if (!last || !el) return;
       const r = el.getBoundingClientRect();
       let vx = 0;
-      if (last.x < r.left + EDGE) vx = -Math.ceil(((r.left + EDGE - last.x) / EDGE) * 14);
-      else if (last.x > r.right - EDGE) vx = Math.ceil(((last.x - (r.right - EDGE)) / EDGE) * 14);
+      const fx = last.fx ?? last.x; // the finger decides, not the aim that sits up and to the left of it
+      if (fx < r.left + EDGE) vx = -Math.ceil(((r.left + EDGE - fx) / EDGE) * 14);
+      else if (fx > r.right - EDGE) vx = Math.ceil(((fx - (r.right - EDGE)) / EDGE) * 14);
       if (vx) {
         el.scrollLeft += vx;
         redo = true; // the outlines are worked out again for the new scroll position
@@ -207,7 +218,7 @@ export function Timeline() {
     };
     const on = (e: Event) => {
       if (redo) return;
-      last = (e as CustomEvent<{ x: number } | null>).detail;
+      last = (e as CustomEvent<{ x: number; fx?: number } | null>).detail;
       if (!last) return void (cancelAnimationFrame(raf), (raf = 0));
       if (!raf) raf = requestAnimationFrame(tick);
     };
@@ -217,15 +228,6 @@ export function Timeline() {
       cancelAnimationFrame(raf);
     };
   }, []);
-  // where the first outline sits on the screen (its bottom left corner): the line from the finger ends there
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      const g = document.querySelector('.drop-ghost');
-      const r = g?.getBoundingClientRect();
-      window.dispatchEvent(new CustomEvent('pc-aim-pt', { detail: r ? { x: r.left, y: r.bottom } : null }));
-    });
-    return () => cancelAnimationFrame(id);
-  }, [ghosts]);
   const lanes = lanesFor(clips, ext);
   // auto: every lane that is shown fits the height of the timeline (between half and double the normal height)
   const autoScale = Math.min(2, Math.max(0.5, ((viewH - RULER - 6) / lanes.length - GAP) / ROW0));
@@ -233,7 +235,7 @@ export function Timeline() {
   const ROW = Math.round(ROW0 * rowScale);
   const total = totalOf(clips);
   const padL = Math.round(viewW / 4); // the yellow line sits a quarter of the way in
-  const extent = Math.max(total, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
+  const extent = Math.max(total, recording ? playhead + 5 : 0, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
   const width = extent * pps + viewW;
   const height = RULER + lanes.length * (ROW + GAP) + 6;
   const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width, ROW });
@@ -329,7 +331,7 @@ export function Timeline() {
     const el = scroller.current;
     if (!el || pinching.current) return;
     setScrollTop(el.scrollTop);
-    const t = Math.max(0, Math.min(totalOf(live.current.clips), el.scrollLeft / live.current.pps));
+    const t = Math.max(0, Math.min(getState().recording ? Infinity : totalOf(live.current.clips), el.scrollLeft / live.current.pps));
     if (Math.abs(t - live.current.playhead) * live.current.pps < 1.5) return;
     if (getState().playing) engine.pause();
     // the line is pulled to the start and end of every strip, like a strip being moved. Once caught it holds until the
@@ -878,6 +880,7 @@ export function Timeline() {
     const clip = clips[i];
     if (!clip) return;
     engine.pause();
+    engine.isolate = true;
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -921,6 +924,7 @@ export function Timeline() {
     const t = trimRef.current;
     if (!t || e.pointerId !== t.id) return;
     cancelAnimationFrame(t.raf);
+    engine.isolate = false;
     trimRef.current = null;
     releaseHud();
     setTrim(null);
@@ -1020,9 +1024,10 @@ export function Timeline() {
     const g = getState();
     const needs = g.selected >= 0 || g.multi.length > 0 || !!g.gap || !!g.drawer;
     say('Play');
-      if (!needs) return void engine.play();
+    const go = () => void (getState().micOn ? playTake() : engine.play());
+    if (!needs) return go();
     deselect();
-    requestAnimationFrame(() => requestAnimationFrame(() => void engine.play()));
+    requestAnimationFrame(() => requestAnimationFrame(go));
   };
   const gapRow = gap ? lanes.indexOf(gap.track) : -1;
 
@@ -1036,19 +1041,37 @@ export function Timeline() {
         <button class="play" onClick={startStop} aria-label={playing ? 'Pause' : 'Play'}>
           {playing ? <Pause /> : <Play />}
         </button>
-        <button
-          class={`tl-btn mode ${handles && hasSel ? 'on' : ''}`}
-          disabled={!(selected >= 0 && multi.length === 0)}
-          aria-pressed={handles && selected >= 0}
-          aria-label="Edit mode: trim, crop and slide the picked strip"
-          onClick={() => {
-            const h = !getState().handles;
-            set({ handles: h });
-            say(h ? 'Edit mode' : 'Select mode');
-          }}
-        >
-          <CropMode />
-        </button>
+        {micOn || !(selected >= 0 && multi.length === 0) ? (
+          <button
+            class={`tl-btn mode ${micOn ? 'on' : ''}`}
+            aria-pressed={micOn}
+            aria-label="Record your voice while the timeline plays"
+            onClick={() => {
+              if (micOn) endTake();
+              set({ micOn: !micOn });
+              say(micOn ? 'Mic off' : 'Mic on: play to record');
+            }}
+          >
+            <MicIcon />
+          </button>
+        ) : (
+          <button
+            class={`tl-btn mode ${handles ? 'on' : ''}`}
+            aria-pressed={handles}
+            aria-label="Edit mode: trim, crop and slide the picked strip"
+            onClick={() => {
+              const h = !getState().handles;
+              set({ handles: h });
+              say(h ? 'Edit mode' : 'Select mode');
+            }}
+          >
+            <CropMode />
+          </button>
+        )}
+        {micOn ? (
+          <LevelBar read={micLevel} label="Microphone level" />
+        ) : (
+          <>
         {!hasSel && !gap ? (
           <button class="tl-btn" disabled={tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
             <Simplify />
@@ -1082,6 +1105,8 @@ export function Timeline() {
           <button class="tl-btn" onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
             <Copy />
           </button>
+        )}
+          </>
         )}
         <div class="tl-grip" role="separator" aria-orientation="horizontal" aria-label="Pane divider: drag up or down to resize the preview and the timeline">
           <span aria-hidden="true">⇕</span>
@@ -1188,7 +1213,9 @@ export function Timeline() {
                     tapped.current = c.id;
                     clearTimeout(tapTimer.current);
                     tapTimer.current = window.setTimeout(() => (tapped.current = null), DOUBLE_MS);
-                    if (!on) (selectClip(i, { keepPlayhead: true }), glideTo(i, false));
+                    // a tap selects the strip and leaves the yellow line where it is; a tap on the picked strip lets it go and the yellow line glides to its start
+                    if (!on) selectClip(i, { keepPlayhead: true });
+                    else (deselect(), glideTo(i, false));
                   }}
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}
@@ -1214,6 +1241,9 @@ export function Timeline() {
                 </button>
               );
             })}
+            {recording && lanes.indexOf(-1) >= 0 && (
+              <div class="rec-outline" style={{ left: `${padL + recording.at * pps}px`, top: `${rowTop(lanes.indexOf(-1))}px`, width: `${Math.max(3, (playhead - recording.at) * pps)}px`, height: `${ROW}px` }} />
+            )}
             {ghosts.map((g, k) => {
               const row = lanes.indexOf(g.track);
               if (row < 0) return null;

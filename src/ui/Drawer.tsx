@@ -4,7 +4,10 @@ import { editText, set, setSolidColor, setSpeed, targets, updateClip, useStore, 
 import { TEXT_FONTS, autoOutline } from '../text.ts';
 import { MAX_SPEED, MIN_SPEED, clipDuration, fmtTime } from '../timeline.ts';
 import type { Fx, Grade, MediaInfo } from '../types.ts';
-import { ImportIcon, Download, Effects, FontIcon, Gear, Help, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
+import { engine } from '../engine.ts';
+import { LevelBar } from './LevelBar.tsx';
+import { ReplacePanel } from './ImportSheet.tsx';
+import { ReplaceIcon, ImportIcon, Download, Effects, FontIcon, Gear, Help, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
 import { Slider } from './Slider.tsx';
 import { useSwap } from './swap.ts';
 
@@ -19,6 +22,7 @@ interface TabDef {
   icon: () => preact.JSX.Element;
 }
 const TABS: TabDef[] = [
+  { key: 'replace', name: 'Replace', icon: () => <ReplaceIcon /> },
   { key: 'text', name: 'Text', icon: TextIcon },
   { key: 'color', name: 'Color', icon: Swatch },
   { key: 'font', name: 'Font', icon: FontIcon },
@@ -32,6 +36,9 @@ const TABS: TabDef[] = [
 /** which tabs make sense for a clip of this media */
 export function tabsFor(m: MediaInfo | undefined): Tool[] {
   if (!m) return [];
+  return ['replace', ...tabsOf(m)];
+}
+function tabsOf(m: MediaInfo): Tool[] {
   if (m.text !== undefined) return ['text', 'color', 'font', 'outline', 'look', 'effects'];
   if (m.solid !== undefined) return ['color', 'look', 'effects'];
   if (m.kind === 'image') return ['look', 'effects'];
@@ -52,12 +59,22 @@ export function TabBar() {
   const aspect = useStore((s) => s.project.settings.aspect);
   const mediaOf = useStore((s) => s.project.media);
   const clips = useStore((s) => s.project.clips);
+  const playing = useStore((s) => s.playing);
+  const micOn = useStore((s) => s.micOn);
   // with several strips picked, only the tabs every one of them has are shown
   const picked = multi.length > 0 ? clips.filter((c) => multi.includes(c.id)) : clip ? [clip] : [];
-  const tabs = picked.length === 0 ? [] : TABS.map((t) => t.key).filter((k) => picked.every((c) => tabsFor(mediaOf[c.mediaId]).includes(k)) && !(k === 'text' && picked.length > 1));
+  const tabs = picked.length === 0 ? [] : TABS.map((t) => t.key).filter((k) => picked.every((c) => tabsFor(mediaOf[c.mediaId]).includes(k)) && !((k === 'text' || k === 'replace') && picked.length > 1));
   const sig = picked.length === 0 ? 'project' : tabs.join() || 'none';
   const { shown, cls } = useSwap({ project: picked.length === 0, tabs }, sig);
   const openSheet = (name: 'import' | 'help' | 'canvas' | 'settings' | 'export') => () => set({ sheet: sheet === name ? 'none' : name, drawer: null });
+  // playing: nobody uses the tabs now, so the space shows how loud the sound is (and lights up red when it clips)
+  if (playing) {
+    return (
+      <nav class={`tabbar meter ${cls}`} aria-label="Sound level">
+        <LevelBar read={() => engine.level()} label="Sound level" />
+      </nav>
+    );
+  }
   if (shown.project) {
     // nothing selected: the tools of the whole project (they rise over the timeline like any other tool)
     const items: { name: 'import' | 'help' | 'canvas' | 'settings' | 'export'; label: string; icon: preact.JSX.Element }[] = [
@@ -68,7 +85,7 @@ export function TabBar() {
       { name: 'export', label: 'Export', icon: <Download /> },
     ];
     return (
-      <nav class={`tabbar ${cls}`} aria-label="Project tools">
+      <nav class={`tabbar ${cls} ${micOn ? 'locked-tabs' : ''}`} aria-label="Project tools">
         {items.map((it) => (
           <button key={it.name} class={`tab ${sheet === it.name ? 'on' : ''}`} disabled={exporting && it.name !== 'export'} aria-expanded={sheet === it.name} onClick={openSheet(it.name)}>
             {it.icon}
@@ -79,7 +96,7 @@ export function TabBar() {
     );
   }
   return (
-    <nav class={`tabbar ${cls}`} aria-label="Clip tools">
+    <nav class={`tabbar ${cls} ${micOn ? 'locked-tabs' : ''}`} aria-label="Clip tools">
       {TABS.filter((t) => shown.tabs.includes(t.key)).map((t) => (
         <button key={t.key} class={`tab ${drawer === t.key ? 'on' : ''}`} aria-expanded={drawer === t.key} onClick={() => set({ drawer: drawer === t.key ? null : t.key, tool: t.key })}>
           <t.icon />
@@ -188,7 +205,7 @@ export function Drawer() {
   // the selection moved to a clip this tab does not suit: show the first tab that does
   const ok = tabsFor(media);
   useEffect(() => {
-    if (tool && clip && media && !ok.includes(tool)) set({ drawer: ok[0] ?? null });
+    if (tool && clip && media && !ok.includes(tool)) set({ drawer: ok.find((k) => k !== 'replace') ?? ok[0] ?? null });
   });
 
   if (!shown || !clip || !media || !ok.includes(shown)) return null;
@@ -307,6 +324,8 @@ export function Drawer() {
             )}
           </section>
         )}
+
+        {tab === 'replace' && <ReplacePanel />}
 
         {tab === 'sound' && (
           <section class="sound">

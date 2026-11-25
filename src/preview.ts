@@ -79,6 +79,41 @@ export class PreviewEngine {
   live: { index: number; view: View } | null = null;
   /** views of several strips being moved together by the group box (clip index to view) */
   liveMany: Map<number, View> | null = null;
+  isolate = false;
+  /** recording a voice: the position keeps running past the last strip (and over an empty timeline) */
+  openEnd = false;
+  /** the sound of the strips is not played (a voice is being recorded) */
+  silent = false;
+  private master: GainNode | null = null;
+  private analyser: AnalyserNode | null = null;
+  private buf = new Float32Array(1024);
+  /** where the sound goes: through one gain and one meter, then out */
+  private out(): AudioNode {
+    const a = this.actx!;
+    if (!this.master) {
+      this.master = a.createGain();
+      this.analyser = a.createAnalyser();
+      this.analyser.fftSize = 1024;
+      this.master.connect(this.analyser);
+      this.analyser.connect(a.destination);
+    }
+    this.master.gain.value = this.silent ? 0 : 1;
+    return this.master;
+  }
+  /** the loudness right now at the output (0 to 1, 1 and above is clipping) */
+  level(): { peak: number; rms: number } {
+    const an = this.analyser;
+    if (!an || !this.playing) return { peak: 0, rms: 0 };
+    an.getFloatTimeDomainData(this.buf as Float32Array<ArrayBuffer>);
+    let peak = 0;
+    let sum = 0;
+    for (const v of this.buf) {
+      const a = Math.abs(v);
+      if (a > peak) peak = a;
+      sum += v * v;
+    }
+    return { peak, rms: Math.sqrt(sum / this.buf.length) };
+  }
   /** crop being dragged on screen (not yet saved to the clip) */
   cropLive: { index: number; crop: Crop } | null = null;
   /** while cutting, the whole uncropped picture is drawn faintly behind the cut one */
@@ -306,7 +341,8 @@ export class PreviewEngine {
     const p = this.deps.getProject();
     ctx.fillStyle = p.settings.background || '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const list = new Set(activeAt(p.clips, this.tl));
+    // while an edge of a strip is trimmed, the preview shows that strip alone, at the frame the edge is on
+    const list = this.isolate && this.scrub ? new Set([this.scrub.index]) : new Set(activeAt(p.clips, this.tl));
     if (this.scrub) list.add(this.scrub.index);
     const order = [...list].sort((a, b) => (p.clips[a]?.track ?? 0) - (p.clips[b]?.track ?? 0) || a - b);
     for (const i of order) {
@@ -445,7 +481,7 @@ export class PreviewEngine {
       }
       const wantT = sourceAt(clip, t);
       const own = !this.bakeable(clip);
-      v.muted = !own || clip.volume <= 0;
+      v.muted = !own || clip.volume <= 0 || this.silent;
       if (own) v.volume = Math.max(0, Math.min(1, clip.volume));
       if (Math.abs(v.playbackRate - clip.speed) > 1e-3) {
         v.playbackRate = clip.speed;
@@ -525,7 +561,7 @@ export class PreviewEngine {
         const gain = actx.createGain();
         gain.gain.value = now.volume;
         src.buffer = buf;
-        src.connect(gain).connect(actx.destination);
+        src.connect(gain).connect(this.out());
         const offset = this.tl - now.at;
         if (offset < buf.duration) src.start(0, offset);
         this.sounds.set(c.id, { src, gain, key });
@@ -566,7 +602,7 @@ export class PreviewEngine {
     this.unsettle();
     this.scrub = null;
     const clips = this.deps.getProject().clips;
-    this.tl = Math.max(0, Math.min(t, totalOf(clips)));
+    this.tl = Math.max(0, this.openEnd ? t : Math.min(t, totalOf(clips)));
     this.sync(this.tl, false);
     const seeks: Promise<void>[] = [];
     for (const i of activeAt(clips, this.tl)) {
@@ -588,9 +624,9 @@ export class PreviewEngine {
     for (const [id, f] of [...this.full]) if (!this.deps.isBuilding(f.media)) this.full.delete(id); // the frames shown for videos that are still being prepared stay
     this.wakeAudio();
     const clips = this.deps.getProject().clips;
-    if (clips.length === 0) return;
+    if (clips.length === 0 && !this.openEnd) return;
     const total = totalOf(clips);
-    if (this.tl >= total - 0.05) this.tl = 0;
+    if (!this.openEnd && this.tl >= total - 0.05) this.tl = 0;
     this.playFrom = this.tl;
     await this.showAt(this.tl);
     const tok = ++this.token;
@@ -609,7 +645,7 @@ export class PreviewEngine {
     if (tok !== this.token || !this.playing) return;
     const total = totalOf(this.deps.getProject().clips);
     const tl = this.clockTl0 + (performance.now() - this.clockT0) / 1000;
-    if (tl >= total) {
+    if (tl >= total && !this.openEnd) {
       const mode = this.deps.getEnd();
       this.tl = mode === 'pause' ? total : mode === 'return' ? Math.min(this.playFrom, total) : 0;
       this.stopPlaying();

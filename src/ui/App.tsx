@@ -15,7 +15,7 @@ import { Preview } from './Preview.tsx';
 import { Drawer, TabBar } from './Drawer.tsx';
 import { SettingsSheet } from './SettingsSheet.tsx';
 import { saveFrame } from '../frame.ts';
-import { aim, dragCtl, lift, showDropPreview, whereAt } from '../dropAim.ts';
+import { aim, dragCtl, lift, liftX, showDropPreview, whereAt } from '../dropAim.ts';
 import { isAudioFile, isImageFile } from '../media.ts';
 import { Timeline } from './Timeline.tsx';
 import { browserInfo, checkSupport } from '../support.ts';
@@ -64,12 +64,6 @@ export function App() {
   const shownSheet = sheet !== 'none' ? sheet : lastSheet;
   const busy = useStore((s) => s.busy);
   const [aimAt, setAimAt] = useState<{ x: number; y: number } | null>(null);
-  const [aimPt, setAimPt] = useState<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    const f = (e: Event) => setAimPt((e as CustomEvent<{ x: number; y: number } | null>).detail);
-    window.addEventListener('pc-aim-pt', f);
-    return () => window.removeEventListener('pc-aim-pt', f);
-  }, []);
   const toast = useStore((s) => s.toast);
   const [tlH, setTlH] = useState(() => {
     try {
@@ -161,6 +155,7 @@ export function App() {
     let edge: { side: string; since: number } | null = null;
     let timer = 0;
     let kindsOf: boolean[] = [];
+    let dursOf: number[] | undefined;
     const where = () => whereAt(pos.x, pos.y);
     const clear = () => {
       lit?.classList.remove('target');
@@ -177,8 +172,9 @@ export function App() {
         stage?.classList.add('drop-on');
       }
       const kinds = kindsOf.length ? kindsOf : [false];
-      showDropPreview(w.lane ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'lane' } : w.stage ? { x: pos.x, y: pos.y - lift(), kinds, mode: 'stage' } : null);
-      setAimAt(w.lane || w.stage ? { x: pos.x, y: pos.y } : null);
+      const at = { x: pos.x - liftX(), y: pos.y - lift(), fx: pos.x, kinds, durs: dursOf };
+      showDropPreview(w.lane ? { ...at, mode: 'lane' } : w.stage ? { ...at, mode: 'stage' } : null);
+      setAimAt(w.lane ? { x: pos.x, y: pos.y } : null); // a line from the finger to the outline only over the timeline
       // held on the highest or lowest lane: a new lane opens now and then
       const lanes = [...document.querySelectorAll('.tl-lane')];
       const side = lit && lit === lanes[0] ? 'top' : lit && lit === lanes[lanes.length - 1] ? 'bottom' : '';
@@ -201,14 +197,16 @@ export function App() {
       window.dispatchEvent(new CustomEvent('pc-lanes', { detail: 'reset' }));
     };
     dragCtl.cur = {
-      move: (x, y, kinds) => {
+      move: (x, y, kinds, durs) => {
         pos = { x, y };
         kindsOf = kinds;
+        dursOf = durs;
         update();
         if (!timer) timer = window.setInterval(update, 150);
       },
       end: () => {
         const w = where();
+        dursOf = undefined;
         const target = aim.value ? { ...aim.value } : null;
         const p = { ...pos };
         const r = { lane: !!w.lane, stage: !!w.stage, target, pos: p };
@@ -339,12 +337,7 @@ export function App() {
     <div class={`app ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
       <FilePicker />
       {dropping && <div class="drop-veil"><span>Drop to import</span></div>}
-      {aimAt && lift() > 0 && (
-        <svg class="aim-line" aria-hidden="true">
-          <line x1={aimPt?.x ?? aimAt.x} y1={aimPt?.y ?? aimAt.y - lift()} x2={aimAt.x} y2={aimAt.y} />
-          <circle cx={aimAt.x} cy={aimAt.y} r="5.5" />
-        </svg>
-      )}
+      {aimAt && lift() > 0 && <AimLine from={aimAt} />}
       {locked && <div class="lock-veil" />}
 
       {busy && !hasClips && <div class="busy">{busy}</div>}
@@ -442,6 +435,35 @@ function Empty({ onEnter }: { onEnter: () => void }) {
 
 /** There is no link that installs a web app by itself: the install is always done in the phone's own browser. So the code opens the site, and the phone offers (or is told how) to install it from there. */
 const SITE = 'https://videowren.web.app/';
+/** the line from the finger to the bottom left corner of the first yellow outline; it follows the outline frame by frame (scrolling moves it) */
+function AimLine({ from }: { from: { x: number; y: number } }) {
+  const line = useRef<SVGLineElement>(null);
+  const last = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      const r = document.querySelector('.drop-ghost')?.getBoundingClientRect();
+      if (r) last.current = { x: r.left, y: r.bottom };
+      const l = line.current;
+      const p = last.current;
+      if (l && p) {
+        l.setAttribute('x1', String(p.x));
+        l.setAttribute('y1', String(p.y));
+        l.style.visibility = 'visible';
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <svg class="aim-line" aria-hidden="true">
+      <line ref={line} x1={from.x} y1={from.y} x2={from.x} y2={from.y} style={{ visibility: 'hidden' }} />
+      <circle cx={from.x} cy={from.y} r="5.5" />
+    </svg>
+  );
+}
+
 function PhoneCode({ onClose }: { onClose: () => void }) {
   const q = qrcode(0, 'M');
   q.addData(SITE);

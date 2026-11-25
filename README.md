@@ -102,3 +102,9 @@ MIT. See [LICENSE](LICENSE).
 - Pictures, colors and texts can be made longer to the left in edit mode; a finger at the edge of the timeline scrolls it while an edge, or the Import card, is dragged.
 - **Volume** goes from 0 to 400 %.
 - While a video's preview copy is being made, the current frame is decoded at preview size (the copy pauses meanwhile), the last frame stays while seeking, and the moving light and note stay on top.
+
+## Recording with the mic toggle
+With nothing selected, the crop/edit-mode button becomes a mic toggle (yellow when on). With it on, Play records your voice while the timeline runs (playback sound is muted), Pause pauses the take, Play resumes it. Seeking, or tapping the mic again, ends the take and its strip appears. While the mic is on, the middle bar shows a dB meter and the bottom tabs are locked; while playing, the bottom tab bar becomes a dB meter with a clip light.
+
+## Replace tab
+Selecting a strip adds **Replace** as the first bottom tab: pick one media file, text, colour, clipboard item or a recording and it takes the place of the strip, keeping its position, length (where possible) and look.

@@ -1204,7 +1204,8 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
     let raf = 0;
     const tick = () => {
       const l = engine.live;
-      setLiveV(l && l.index === getState().selected ? l.view : null);
+      // the box follows a slide into place (fit, fill, quarter and half placements) as well as a finger
+      setLiveV(l && l.index === getState().selected ? l.view : (engine.liveMany?.get(getState().selected) ?? null));
       const cl = engine.cropLive;
       setLiveC(cl && cl.index === getState().selected ? cl.crop : null);
       raf = requestAnimationFrame(tick);

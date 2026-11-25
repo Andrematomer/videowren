@@ -193,7 +193,7 @@ async function canvasToJpeg(c: HTMLCanvasElement | OffscreenCanvas): Promise<Blo
   return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.7));
 }
 
-export const IMAGE_MAX_SECONDS = 30;
+export const IMAGE_MAX_SECONDS = 3600;
 export const IMAGE_DEFAULT_SECONDS = 5;
 
 export const isAudioFile = (f: File): boolean => f.type.startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|caf|aiff?)$/i.test(f.name);

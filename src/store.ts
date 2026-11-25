@@ -10,7 +10,7 @@ import { clearSaved, loadSaved, requestPersistence, saveMedia, saveProject } fro
 import { activeAt, clipDuration, clipEnd, endOfTrack, overwriteOverlaps, freeTrack, laneRemovable, optimizeLanes, removeLane as removeLaneFrom, resolveOverlaps, settleAt, MAX_SPEED, MIN_CLIP, MIN_SPEED, removeGap as removeGapFrom, stackTracks, totalOf, type Gap } from './timeline.ts';
 import { DEFAULT_SETTINGS, emptyProject, type Clip, type ExportSettings, type MediaInfo, type Project, type View } from './types.ts';
 
-export type Tool = 'speed' | 'sound' | 'look' | 'effects' | 'clip' | 'text' | 'color' | 'font' | 'outline';
+export type Tool = 'replace' | 'speed' | 'sound' | 'look' | 'effects' | 'clip' | 'text' | 'color' | 'font' | 'outline';
 export type Sheet = 'none' | 'export' | 'settings' | 'canvas' | 'help' | 'import';
 
 export interface Toast {
@@ -49,6 +49,10 @@ export interface State {
   handles: boolean;
   /** files waiting in the Import tab to be dragged onto the timeline or the preview */
   tray: File[];
+  /** the mic button in the middle bar is on: playing records a voice on the timeline */
+  micOn: boolean;
+  /** a voice is being recorded onto the timeline; the take began at `at` seconds */
+  recording: { at: number } | null;
   /** the crop handles are shown on the preview */
   boxMode: boolean;
   /** the text clip being edited (index), or null when a new text is being made */
@@ -116,6 +120,8 @@ let state: State = {
   slide: false,
   handles: false,
   tray: [],
+  micOn: false,
+  recording: null,
   boxMode: false,
   textEdit: null,
   proxyProgress: {},
