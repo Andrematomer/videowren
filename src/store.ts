@@ -2,7 +2,7 @@ import { say } from './hud.ts';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { ASPECT_VALUE, IDENTITY_VIEW, baseScale, fillZoom, nearestAspect, normAngle, outputSize } from './geometry.ts';
 import { autoOutline, renderSolid, renderText } from './text.ts';
-import { IMAGE_MAX_SECONDS, decodeImage, dropAllMedia, isAudioFile, isImageFile, probeAudio, mediaBlob, newId, probeImage, probeVideo, registerMedia, setPhotoPreviewPx, UnsupportedMediaError } from './media.ts';
+import { IMAGE_MAX_SECONDS, decodeImage, dropAllMedia, dropMedia, isAudioFile, isImageFile, probeAudio, mediaBlob, newId, probeImage, probeVideo, registerMedia, setPhotoPreviewPx, UnsupportedMediaError } from './media.ts';
 import { setAwakeMode } from './wake.ts';
 import { computePeaks } from './wave.ts';
 import { onProxyProgress, onProxyWork, queueProxy, setProxyOrder } from './proxy.ts';
@@ -51,6 +51,8 @@ export interface State {
   tray: File[];
   /** the mic button in the middle bar is on: playing records a voice on the timeline */
   micOn: boolean;
+  /** an Import card is being carried over the app */
+  carrying: boolean;
   /** a voice is being recorded onto the timeline; the take began at `at` seconds */
   recording: { at: number } | null;
   /** the crop handles are shown on the preview */
@@ -121,6 +123,7 @@ let state: State = {
   handles: false,
   tray: [],
   micOn: false,
+  carrying: false,
   recording: null,
   boxMode: false,
   textEdit: null,
@@ -643,6 +646,69 @@ export function setName(name: string): void {
 // ---------- import ----------
 
 /** opts.track: the files follow one another on that lane (when it suits their kind); opts.stack: as layers, all starting at the yellow line */
+
+/** a file that was read and registered before it was placed (the files waiting in the Import tray): its small preview copy is already being made */
+interface Prepared {
+  id: string;
+  info: MediaInfo;
+  thumb: Blob | null;
+}
+const prepared = new WeakMap<File, Promise<Prepared>>();
+const used = new WeakSet<File>();
+function preparedFor(file: File, wantId?: string): Promise<Prepared> {
+  let p = prepared.get(file);
+  if (!p) {
+    p = (async () => {
+      const id = wantId ?? newId();
+      const image = isImageFile(file);
+      const audio = !image && isAudioFile(file);
+      let info: MediaInfo;
+      let thumb: Blob | null;
+      if (image) {
+        const r = await probeImage(file, id);
+        info = r.info;
+        thumb = r.thumb;
+        registerMedia(id, file, thumb, { name: file.name, bitmap: r.bitmap, photo: true });
+      } else if (audio) {
+        const r = await probeAudio(file, id);
+        info = r.info;
+        thumb = r.thumb;
+        registerMedia(id, file, thumb, { name: file.name });
+      } else {
+        const r = await probeVideo(file, id);
+        info = r.info;
+        thumb = r.thumb;
+        registerMedia(id, file, thumb, { name: file.name });
+      }
+      queueProxy(id, info, bootPrefs.previewLong);
+      return { id, info, thumb };
+    })();
+    prepared.set(file, p);
+    p.catch(() => prepared.delete(file));
+  }
+  return p;
+}
+/** starts reading the waiting files one after the other, so that videos get their preview copies while the person is still deciding where to put them */
+export async function prepareFiles(files: File[]): Promise<void> {
+  for (const f of files) {
+    if (prepared.has(f) && used.has(f)) continue;
+    await preparedFor(f).catch(() => undefined);
+  }
+}
+/** the waiting files are being placed now: they must not be forgotten when the tray closes */
+export function claimPrepared(files: File[]): void {
+  for (const f of files) used.add(f);
+}
+/** the waiting files were not used after all */
+export function discardPrepared(files: File[]): void {
+  for (const f of files) {
+    if (used.has(f)) continue;
+    const p = prepared.get(f);
+    prepared.delete(f);
+    void p?.then((r) => dropMedia(r.id)).catch(() => undefined);
+  }
+}
+
 export async function importFiles(files: File[], mode: AddMode = 'end', opts: { track?: number; at?: number; stack?: boolean } = {}): Promise<void> {
   if (files.length === 0) return;
   // replacing: the first file takes the place of the selected strip
@@ -661,26 +727,13 @@ export async function importFiles(files: File[], mode: AddMode = 'end', opts: { 
     const image = isImageFile(file);
     const audio = !image && isAudioFile(file);
     set({ busy: files.length > 1 ? `Reading ${i + 1} of ${files.length}…` : image ? 'Reading picture…' : audio ? 'Reading sound…' : 'Reading video…' });
-    const id = newId();
     try {
-      let info: MediaInfo;
-      let thumb: Blob | null;
-      if (image) {
-        const r = await probeImage(file, id);
-        info = r.info;
-        thumb = r.thumb;
-        registerMedia(id, file, thumb, { name: file.name, bitmap: r.bitmap });
-      } else if (audio) {
-        const r = await probeAudio(file, id);
-        info = r.info;
-        thumb = r.thumb;
-        registerMedia(id, file, thumb, { name: file.name });
-      } else {
-        const r = await probeVideo(file, id);
-        info = r.info;
-        thumb = r.thumb;
-        registerMedia(id, file, thumb, { name: file.name });
-      }
+      const r = await preparedFor(file);
+      const id = r.id;
+      const info: MediaInfo = r.info;
+      const thumb: Blob | null = r.thumb;
+      used.add(file);
+      prepared.delete(file);
       media[id] = info;
       const base = audio ? -1 : 0;
       const end = image ? Math.min(info.duration, state.prefs.imageSeconds) : info.duration;
@@ -789,7 +842,7 @@ export async function restore(): Promise<void> {
         const bitmap = info?.kind === 'image' ? await decodeImage(m.blob) : null;
         // a copy made at another preview size (the setting was changed before this start) is made again
         const fresh = !!m.proxy && (m.proxyLong ?? 240) === bootPrefs.previewLong;
-        registerMedia(id, m.blob, m.thumb, { name: m.name, proxy: fresh ? m.proxy : null, bitmap });
+        registerMedia(id, m.blob, m.thumb, { name: m.name, proxy: fresh ? m.proxy : null, bitmap, photo: info?.kind === 'image' });
         usable.add(id);
         if (info && !fresh) queueProxy(id, info, bootPrefs.previewLong);
       } catch {
@@ -971,7 +1024,7 @@ export async function pasteClipboard(mode: AddMode, toTray = false): Promise<voi
           files.push(new File([blob], `Pasted.${media.split('/')[1]!.split('+')[0]}`, { type: media }));
         } else if (it.types.includes('text/plain')) text = await (await it.getType('text/plain')).text();
       }
-      if (files.length) return void (toTray ? set({ tray: files }) : await importFiles(files, mode));
+      if (files.length) return void (toTray && files.length > 1 ? set({ tray: files, sheet: 'import', drawer: null }) : await importFiles(files, mode));
       if (text?.trim()) return void (await addTextClip(mode, text.trim()));
     } else if (navigator.clipboard?.readText) {
       const t = (await navigator.clipboard.readText()).trim();

@@ -1,5 +1,5 @@
 import { withPriority } from './proxy.ts';
-import { mediaBitmap, mediaBlob, mediaEntry, mediaSkeleton, mediaThumbCanvas, mediaPreviewBitmap, mediaUrl } from './media.ts';
+import { onPictureReady, mediaBitmap, mediaBlob, mediaEntry, mediaSkeleton, mediaThumbCanvas, mediaPreviewBitmap, mediaUrl } from './media.ts';
 import { PreviewEngine } from './preview.ts';
 import { onBakeChange, progress } from './bake.ts';
 import { getState, set } from './store.ts';
@@ -24,6 +24,7 @@ export const engine = new PreviewEngine({
 });
 
 
+onPictureReady(() => engine.draw());
 onBakeChange(() => set({ bakeProgress: Object.fromEntries(progress) }));
 
 // the wipe over a building video follows its progress

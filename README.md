@@ -94,17 +94,15 @@ MIT. See [LICENSE](LICENSE).
 
 ## Import, recording, taps
 
-- **Import tab** (first tab with nothing selected): Media, Text, Color, Record audio, Clipboard. Media, Clipboard and recordings wait as a card of thumbnails that is dragged onto the timeline or the preview; the outline shows the landing place and a yellow line joins it to the finger on touch screens.
-- **Record audio** records in the drawer without playing; the take appears as a card to drag. On iPhone the audio session is set back to playback afterwards.
-- **Double tap** a strip in the timeline: it zooms to span the middle half of the screen. A single tap acts at once (it selects and glides the yellow line to the strip). Select mode and edit mode are switched with the button at the left of the middle bar.
+- **Import tab** (first tab with nothing selected): Media, Text, Color, Clipboard. One item is placed at once; several wait as a pile of thumbnails (videos already get their preview copies) that is dragged onto the timeline or the preview; the outline shows the landing place and a yellow line joins it to the finger on touch screens.
+- **Tapping a strip**: select (and the yellow line glides to it), tap again to zoom to its length, tap again to deselect; once zoomed, every tap toggles selection.
 - **Dropping files from outside** (Files, Photos, another window): they are let go anywhere on the page and wait in the Import tab as a card, to be dragged to a place there.
-- **Recording** starts when you press Record; Pause and Resume keep it one take.
 - Pictures, colors and texts can be made longer to the left in edit mode; a finger at the edge of the timeline scrolls it while an edge, or the Import card, is dragged.
 - **Volume** goes from 0 to 400 %.
 - While a video's preview copy is being made, the current frame is decoded at preview size (the copy pauses meanwhile), the last frame stays while seeking, and the moving light and note stay on top.
 
 ## Recording with the mic toggle
-With nothing selected, the crop/edit-mode button becomes a mic toggle (yellow when on). With it on, Play records your voice while the timeline runs (playback sound is muted), Pause pauses the take, Play resumes it. Seeking, or tapping the mic again, ends the take and its strip appears. While the mic is on, the middle bar shows a dB meter and the bottom tabs are locked; while playing, the bottom tab bar becomes a dB meter with a clip light.
+With nothing selected the edit-mode button is a mic. Tap: record at once while the timeline plays (playback is muted); tap again: stop. Hold: record until you let go. Pause and Play pause and resume the same take; seeking ends it and its strip appears. The bottom bar shows the microphone level while recording and the output level (clip light) while playing; the other buttons of the middle bar are greyed.
 
 ## Replace tab
 Selecting a strip adds **Replace** as the first bottom tab: pick one media file, text, colour, clipboard item or a recording and it takes the place of the strip, keeping its position, length (where possible) and look.

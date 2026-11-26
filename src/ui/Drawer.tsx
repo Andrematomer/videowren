@@ -6,8 +6,9 @@ import { MAX_SPEED, MIN_SPEED, clipDuration, fmtTime } from '../timeline.ts';
 import type { Fx, Grade, MediaInfo } from '../types.ts';
 import { engine } from '../engine.ts';
 import { LevelBar } from './LevelBar.tsx';
+import { micLevel } from '../recorder.ts';
 import { ReplacePanel } from './ImportSheet.tsx';
-import { ReplaceIcon, ImportIcon, Download, Effects, FontIcon, Gear, Help, Look, Mute, OutlineIcon, Sound, Speed, Swatch, TextIcon } from './icons.tsx';
+import { MicIcon, SpeakerIcon, ReplaceIcon, ImportIcon, Download, Effects, Gear, Help, Look, Mute, Sound, Speed, PaintBucket, TextIcon } from './icons.tsx';
 import { Slider } from './Slider.tsx';
 import { useSwap } from './swap.ts';
 
@@ -24,9 +25,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { key: 'replace', name: 'Replace', icon: () => <ReplaceIcon /> },
   { key: 'text', name: 'Text', icon: TextIcon },
-  { key: 'color', name: 'Color', icon: Swatch },
-  { key: 'font', name: 'Font', icon: FontIcon },
-  { key: 'outline', name: 'Outline', icon: OutlineIcon },
+  { key: 'color', name: 'Color', icon: () => <PaintBucket /> },
   { key: 'speed', name: 'Speed', icon: Speed },
   { key: 'sound', name: 'Sound', icon: Sound },
   { key: 'look', name: 'Look', icon: Look },
@@ -39,7 +38,7 @@ export function tabsFor(m: MediaInfo | undefined): Tool[] {
   return ['replace', ...tabsOf(m)];
 }
 function tabsOf(m: MediaInfo): Tool[] {
-  if (m.text !== undefined) return ['text', 'color', 'font', 'outline', 'look', 'effects'];
+  if (m.text !== undefined) return ['text', 'color', 'look', 'effects'];
   if (m.solid !== undefined) return ['color', 'look', 'effects'];
   if (m.kind === 'image') return ['look', 'effects'];
   if (m.kind === 'audio') return ['speed', 'sound'];
@@ -61,6 +60,7 @@ export function TabBar() {
   const clips = useStore((s) => s.project.clips);
   const playing = useStore((s) => s.playing);
   const micOn = useStore((s) => s.micOn);
+  const carrying = useStore((s) => s.carrying);
   // with several strips picked, only the tabs every one of them has are shown
   const picked = multi.length > 0 ? clips.filter((c) => multi.includes(c.id)) : clip ? [clip] : [];
   const tabs = picked.length === 0 ? [] : TABS.map((t) => t.key).filter((k) => picked.every((c) => tabsFor(mediaOf[c.mediaId]).includes(k)) && !((k === 'text' || k === 'replace') && picked.length > 1));
@@ -68,9 +68,25 @@ export function TabBar() {
   const { shown, cls } = useSwap({ project: picked.length === 0, tabs }, sig);
   const openSheet = (name: 'import' | 'help' | 'canvas' | 'settings' | 'export') => () => set({ sheet: sheet === name ? 'none' : name, drawer: null });
   // playing: nobody uses the tabs now, so the space shows how loud the sound is (and lights up red when it clips)
+  if (carrying) {
+    return (
+      <nav class="tabbar meter drop-note" aria-live="polite">
+        Drop onto the timeline to put it at that spot
+      </nav>
+    );
+  }
+  if (micOn) {
+    return (
+      <nav class={`tabbar meter ${cls}`} aria-label="Microphone level">
+        <MicIcon size={20} />
+        <LevelBar read={micLevel} label="Microphone level" />
+      </nav>
+    );
+  }
   if (playing) {
     return (
       <nav class={`tabbar meter ${cls}`} aria-label="Sound level">
+        <SpeakerIcon size={20} />
         <LevelBar read={() => engine.level()} label="Sound level" />
       </nav>
     );
@@ -85,7 +101,7 @@ export function TabBar() {
       { name: 'export', label: 'Export', icon: <Download /> },
     ];
     return (
-      <nav class={`tabbar ${cls} ${micOn ? 'locked-tabs' : ''}`} aria-label="Project tools">
+      <nav class={`tabbar ${cls}`} aria-label="Project tools">
         {items.map((it) => (
           <button key={it.name} class={`tab ${sheet === it.name ? 'on' : ''}`} disabled={exporting && it.name !== 'export'} aria-expanded={sheet === it.name} onClick={openSheet(it.name)}>
             {it.icon}
@@ -96,7 +112,7 @@ export function TabBar() {
     );
   }
   return (
-    <nav class={`tabbar ${cls} ${micOn ? 'locked-tabs' : ''}`} aria-label="Clip tools">
+    <nav class={`tabbar ${cls}`} aria-label="Clip tools">
       {TABS.filter((t) => shown.tabs.includes(t.key)).map((t) => (
         <button key={t.key} class={`tab ${drawer === t.key ? 'on' : ''}`} aria-expanded={drawer === t.key} onClick={() => set({ drawer: drawer === t.key ? null : t.key, tool: t.key })}>
           <t.icon />
@@ -270,21 +286,6 @@ export function Drawer() {
         {tab === 'text' && (
           <section>
             <TextBox key={clip.id} index={index} text={media.text ?? ''} />
-          </section>
-        )}
-
-        {tab === 'color' && (
-          <section>
-            {media.solid !== undefined ? (
-              <ColorRow label="Color" value={media.solid} onPick={(c) => each((i) => void setSolidColor(i, c))} />
-            ) : (
-              <ColorRow label="Text color" value={textColor} onPick={(c) => each((i) => void editText(i, { color: c }))} />
-            )}
-          </section>
-        )}
-
-        {tab === 'font' && (
-          <section>
             <div class="chips" role="group" aria-label="Font">
               {TEXT_FONTS.map((f) => (
                 <button key={f.key} class={`chip ${f.key === (media.textFont ?? 'sans') ? 'on' : ''}`} style={{ fontFamily: f.css, fontWeight: f.weight }} aria-pressed={f.key === (media.textFont ?? 'sans')} onClick={() => each((i) => void editText(i, { font: f.key }))}>
@@ -295,8 +296,15 @@ export function Drawer() {
           </section>
         )}
 
-        {tab === 'outline' && (
+        {tab === 'color' && (
           <section>
+            {media.solid !== undefined ? (
+              <ColorRow label="Color" value={media.solid} onPick={(c) => each((i) => void setSolidColor(i, c))} />
+            ) : (
+              <ColorRow label="Text color" value={textColor} onPick={(c) => each((i) => void editText(i, { color: c }))} />
+            )}
+            {media.solid === undefined && (
+              <>
             {row('Thickness', `${outlineWidth}`, () => each((i) => void editText(i, { width: 14 })), <Slider label="Outline thickness" value={outlineWidth} min={0} max={40} step={1} fineStep={0.5} snaps={[0, 14]} snapPx={10} valueText={`${outlineWidth}`} onChange={(v) => {
               const w = Math.round(v);
               const my = ++owSeq.current;
@@ -306,6 +314,8 @@ export function Drawer() {
               ).then(() => owSeq.current === my && setOw(null));
             }} />)}
             <ColorRow label="Outline color" value={outlineColor} onPick={(c) => each((i) => void editText(i, { outline: c }))} />
+              </>
+            )}
           </section>
         )}
 

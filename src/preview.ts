@@ -80,6 +80,13 @@ export class PreviewEngine {
   /** views of several strips being moved together by the group box (clip index to view) */
   liveMany: Map<number, View> | null = null;
   isolate = false;
+  /** the split view while an edge of a strip is trimmed: the frame at the fixed edge (a snapshot) next to the live one */
+  split: { liveSide: 'left' | 'right'; still: HTMLCanvasElement | null; labels: [string, string] } | null = null;
+  private splitLabels: [string, string] = ['', ''];
+  private splitBusy = false;
+  private fromSplit = false;
+  private pendingScrub: { index: number; t: number; report: boolean } | null = null;
+  private liveSnap: HTMLCanvasElement | null = null;
   /** recording a voice: the position keeps running past the last strip (and over an empty timeline) */
   openEnd = false;
   /** the sound of the strips is not played (a voice is being recorded) */
@@ -384,7 +391,85 @@ export class PreviewEngine {
         drawLayer(ctx, v, v.videoWidth, v.videoHeight, look, o);
       }
     }
+    if (this.split && this.isolate && this.scrub && !this.splitBusy) this.composeSplit();
     this.onDraw?.();
+  }
+
+  /** replaces the picture by two halves: the first frame kept (left) and the last frame kept (right) of the strip being trimmed, each as the strip really looks (position, size, crop) */
+  private composeSplit(): void {
+    const ctx = this.ctx;
+    const c = this.canvas;
+    const sp = this.split;
+    if (!ctx || !c || !sp) return;
+    const W = c.width;
+    const H = c.height;
+    const snap = (this.liveSnap ??= document.createElement('canvas'));
+    snap.width = W;
+    snap.height = H;
+    snap.getContext('2d')!.drawImage(c, 0, 0);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+    const gap = Math.max(4, W * 0.006);
+    const pw = (W - gap) / 2;
+    const k = pw / W;
+    const ph = H * k;
+    const y = (H - ph) / 2;
+    const left = sp.liveSide === 'left' ? snap : sp.still;
+    const right = sp.liveSide === 'left' ? sp.still : snap;
+    if (left) ctx.drawImage(left, 0, y, pw, ph);
+    if (right) ctx.drawImage(right, pw + gap, y, pw, ph);
+    ctx.fillStyle = '#ffc933';
+    ctx.fillRect(pw, 0, gap, H);
+    const fs = Math.max(12, Math.round(W * 0.034));
+    ctx.font = `700 ${fs}px system-ui, -apple-system, sans-serif`;
+    ctx.textBaseline = 'top';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = fs * 0.28;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillStyle = '#fff';
+    this.splitLabels.forEach((t, i) => {
+      const x = (i === 0 ? 0 : pw + gap) + fs * 0.6;
+      ctx.strokeText(t, x, y + fs * 0.5);
+      ctx.fillText(t, x, y + fs * 0.5);
+    });
+  }
+
+  /** the trim of an edge begins: the frame at the other edge is kept as the fixed half of the split view */
+  async beginSplit(index: number, liveSide: 'left' | 'right', stillT: number, liveT: number): Promise<void> {
+    this.isolate = true;
+    this.split = { liveSide, still: null, labels: ['', ''] };
+    this.splitBusy = true;
+    const sp = this.split;
+    const keep = this.split;
+    this.split = null;
+    this.fromSplit = true;
+    this.scrubSource(index, stillT, false);
+    this.fromSplit = false;
+    while (this.scrubbing || this.scrubTarget) await new Promise((r) => setTimeout(r, 16));
+    const c = this.canvas;
+    if (c && this.isolate) {
+      const st = document.createElement('canvas');
+      st.width = c.width;
+      st.height = c.height;
+      st.getContext('2d')!.drawImage(c, 0, 0);
+      sp.still = st;
+    }
+    this.splitBusy = false;
+    if (!this.isolate) return;
+    this.split = keep;
+    const p = this.pendingScrub;
+    this.pendingScrub = null;
+    this.scrubSource(p?.index ?? index, p?.t ?? liveT, false);
+  }
+  setSplitLabels(a: string, b: string): void {
+    this.splitLabels = [a, b];
+  }
+  endSplit(): void {
+    this.isolate = false;
+    this.split = null;
+    this.splitBusy = false;
+    this.pendingScrub = null;
   }
 
   // ---------- the pool of video elements ----------
@@ -674,6 +759,7 @@ export class PreviewEngine {
    * project. Rapid calls are merged: only the newest target is ever seeked to.
    */
   scrubSource(index: number, srcT: number, report: boolean): void {
+    if (this.splitBusy && !this.fromSplit) return void (this.pendingScrub = { index, t: srcT, report });
     this.token++;
     cancelAnimationFrame(this.raf);
     this.stopPlaying();

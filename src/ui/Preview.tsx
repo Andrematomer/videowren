@@ -1200,19 +1200,22 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   const [liveV, setLiveV] = useState<View | null>(null);
   const [liveC, setLiveC] = useState<Crop | null>(null);
   useEffect(() => {
-    if (!quiet) return void (setLiveV(null), setLiveC(null));
     let raf = 0;
+    const sameV = (a: View | null, b: View | null) => a === b || (!!a && !!b && a.x === b.x && a.y === b.y && a.zoom === b.zoom && a.rot === b.rot);
+    const sameC = (a: Crop | null, b: Crop | null) => a === b || (!!a && !!b && a.l === b.l && a.t === b.t && a.r === b.r && a.b === b.b);
     const tick = () => {
       const l = engine.live;
       // the box follows a slide into place (fit, fill, quarter and half placements) as well as a finger
-      setLiveV(l && l.index === getState().selected ? l.view : (engine.liveMany?.get(getState().selected) ?? null));
+      const nv = l && l.index === getState().selected ? l.view : (engine.liveMany?.get(getState().selected) ?? null);
+      setLiveV((p) => (sameV(p, nv) ? p : nv));
       const cl = engine.cropLive;
-      setLiveC(cl && cl.index === getState().selected ? cl.crop : null);
+      const nc = cl && cl.index === getState().selected ? cl.crop : null;
+      setLiveC((p) => (sameC(p, nc) ? p : nc));
       raf = requestAnimationFrame(tick);
     };
     tick();
     return () => cancelAnimationFrame(raf);
-  }, [quiet]);
+  }, []);
   const dragFrame = useRef(0);
   const dragLast = useRef<{ view: View; crop: Crop } | null>(null);
   const st = useRef<{ id: number; h: Handle; p0: Pt; raw0: Pt; off: Pt; moved: boolean; view0: View; crop0: Crop; last: Pt; anchor: Pt; fineRaw: Pt; fineEff: Pt; fine: boolean; timer: number; frame: HTMLElement | null; edit: boolean } | null>(null);
@@ -1254,10 +1257,10 @@ function TransformBox({ boxW: W, boxH: H }: { boxW: number; boxH: number }) {
   useEffect(cancel, [selected]);
 
   if (!on || !clip || !media || media.kind === 'audio') return null;
-  const view = drag?.view ?? (quiet ? liveV : null) ?? clip.view;
+  const view = drag?.view ?? liveV ?? clip.view;
   // text: the box hugs the letters, so each side starts where the ink starts
   const inset: Crop = media.textBox ?? { l: 0, t: 0, r: 0, b: 0 };
-  const stored: Crop = drag?.crop ?? (quiet ? liveC : null) ?? clip.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+  const stored: Crop = drag?.crop ?? liveC ?? clip.crop ?? { l: 0, t: 0, r: 0, b: 0 };
   const stretch = media.solid !== undefined; // a flat color has nothing to cut: its sides stretch it instead
   const crop: Crop = stretch ? stored : { l: Math.max(stored.l, inset.l), t: Math.max(stored.t, inset.t), r: Math.max(stored.r, inset.r), b: Math.max(stored.b, inset.b) };
   const sc = baseScale(media.width, media.height, W, H) * view.zoom;

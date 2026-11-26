@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { engine } from './engine.ts';
-import { getState, importFiles, set, toast } from './store.ts';
+import { deselect, getState, importFiles, set, toast } from './store.ts';
 
 /**
  * Voice recording, two ways:
@@ -128,7 +128,7 @@ async function begin(): Promise<boolean> {
     if (blob.size < 200) return void toast('Nothing was recorded.');
     const f = new File([blob], `Recording ${++taken}.${ext}`, { type });
     knownDuration.set(f, lastSecs);
-    if (was === 'take') void importFiles([f], 'time', { at: takeAt, track: -1 });
+    if (was === 'take') void importFiles([f], 'time', { at: takeAt, track: -1 }).then(() => deselect()); // nothing stays picked, so the mic button is still there for the next take
     else if (replaceNext) void importFiles([f], 'replace');
     else set({ tray: [f] });
     replaceNext = false;

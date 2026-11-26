@@ -257,6 +257,19 @@ export const MicIcon = ({ size }: { size?: number }) => (
     <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
   </I>
 );
+export const SpeakerIcon = ({ size }: { size?: number }) => (
+  <I size={size}>
+    <path d="M4 9v6h4l5 4V5L8 9H4z" />
+    <path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" />
+  </I>
+);
+export const PaintBucket = ({ size }: { size?: number }) => (
+  <I size={size}>
+    <path d="M5 11l7-7 7 7-7 7-7-7z" />
+    <path d="M5 11h14" />
+    <path d="M21 15c0 0-2 2.2-2 3.5a2 2 0 0 0 4 0C23 17.2 21 15 21 15z" />
+  </I>
+);
 export const ImportIcon = ({ size }: { size?: number }) => (
   <I size={size}>
     <path d="M12 3v12" />

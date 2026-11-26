@@ -3,7 +3,7 @@ import { keyOf } from '../bake.ts';
 import { engine } from '../engine.ts';
 import { thumbUrl } from '../media.ts';
 import { hold, release as releaseHud, say } from '../hud.ts';
-import { DOUBLE_MS, optimizeWithFeedback, pasteClipboard, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
+import { optimizeWithFeedback, pasteClipboard, deleteClip, deselect, duplicateClip, getState, moveClipTo, moveMulti, redo, removeGap, removeLane, selectClip, set, setMulti, splitAtPlayhead, toast, toggleMulti, undo, updateClip, useStore } from '../store.ts';
 import { PEAKS_PER_SEC } from '../wave.ts';
 import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, stackTracks, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
@@ -76,6 +76,7 @@ export function Timeline() {
   const playhead = useStore((s) => s.playhead);
   const playing = useStore((s) => s.playing);
   const micOn = useStore((s) => s.micOn);
+  const carrying = useStore((s) => s.carrying);
   const recording = useStore((s) => s.recording);
   const progress = useStore((s) => s.proxyProgress);
   const gap = useStore((s) => s.gap);
@@ -206,8 +207,9 @@ export function Timeline() {
       const r = el.getBoundingClientRect();
       let vx = 0;
       const fx = last.fx ?? last.x; // the finger decides, not the aim that sits up and to the left of it
-      if (fx < r.left + EDGE) vx = -Math.ceil(((r.left + EDGE - fx) / EDGE) * 14);
-      else if (fx > r.right - EDGE) vx = Math.ceil(((fx - (r.right - EDGE)) / EDGE) * 14);
+      const Z = EDGE + 20; // a wider zone than for a strip: a thumb carrying the card rarely gets to the very edge
+      if (fx < r.left + Z) vx = -Math.ceil(Math.min(1.5, (r.left + Z - fx) / Z) * 16);
+      else if (fx > r.right - Z) vx = Math.ceil(Math.min(1.5, (fx - (r.right - Z)) / Z) * 16);
       if (vx) {
         el.scrollLeft += vx;
         redo = true; // the outlines are worked out again for the new scroll position
@@ -235,11 +237,14 @@ export function Timeline() {
   const ROW = Math.round(ROW0 * rowScale);
   const total = totalOf(clips);
   const padL = Math.round(viewW / 4); // the yellow line sits a quarter of the way in
-  const extent = Math.max(total, recording ? playhead + 5 : 0, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
+  // the end of the timeline follows an edge that is being pulled out, so there is room to scroll after it
+  const trimEnd = trim && clips[trim.index] ? trim.at + (trim.end - trim.start) / clips[trim.index]!.speed : 0;
+  const ghostEnd = ghosts.reduce((m, g) => Math.max(m, g.at + g.dur), 0);
+  const extent = Math.max(total, trimEnd, ghostEnd, recording ? playhead + 5 : 0, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
   const width = extent * pps + viewW;
   const height = RULER + lanes.length * (ROW + GAP) + 6;
-  const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width, ROW });
-  live.current = { clips, pps, lanes, playhead, media, padL, height, width, ROW };
+  const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width, ROW, extent });
+  live.current = { clips, pps, lanes, playhead, media, padL, height, width, ROW, extent };
   const rowTop = (row: number) => RULER + row * (ROW + GAP);
   /** where a pie sits on a strip: the middle of the part of the strip that is on screen (like the bin of a gap) */
   const pieX = (left: number, w: number): number => {
@@ -275,8 +280,6 @@ export function Timeline() {
 
   /** tapping a strip: the position slides to its start while the zoom changes so the strip fills the middle half (25% to 75%) of the width */
   const glide = useRef(0);
-  const tapped = useRef<string | null>(null);
-  const tapTimer = useRef(0);
   const glideTo = (index: number, zoom: boolean) => {
     const c = live.current.clips[index];
     if (!c) return;
@@ -331,7 +334,7 @@ export function Timeline() {
     const el = scroller.current;
     if (!el || pinching.current) return;
     setScrollTop(el.scrollTop);
-    const t = Math.max(0, Math.min(getState().recording ? Infinity : totalOf(live.current.clips), el.scrollLeft / live.current.pps));
+    const t = Math.max(0, Math.min(getState().recording ? Infinity : Math.max(totalOf(live.current.clips), live.current.extent), el.scrollLeft / live.current.pps));
     if (Math.abs(t - live.current.playhead) * live.current.pps < 1.5) return;
     if (getState().playing) engine.pause();
     // the line is pulled to the start and end of every strip, like a strip being moved. Once caught it holds until the
@@ -367,7 +370,7 @@ export function Timeline() {
     if (!seekFrame.current)
       seekFrame.current = requestAnimationFrame(() => {
         seekFrame.current = 0;
-        void engine.showAt(getState().playhead);
+        if (!trimRef.current) void engine.showAt(getState().playhead);
       });
   };
 
@@ -880,7 +883,9 @@ export function Timeline() {
     const clip = clips[i];
     if (!clip) return;
     engine.pause();
-    engine.isolate = true;
+    const last = Math.max(clip.start, clip.end - 0.05);
+    engine.setSplitLabels(`Start ${fmtTime(clip.start, 2)}`, `End ${fmtTime(clip.end, 2)}`);
+    void engine.beginSplit(i, side, side === 'left' ? last : clip.start, side === 'left' ? clip.start : last);
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {
@@ -912,6 +917,7 @@ export function Timeline() {
     hold(`Trim ${fmtTime((t.cur.end - t.cur.start) / (live.current.clips[t.i]?.speed ?? 1), 2)}`);
     trimTick.current(t.guide ?? null);
     setTrimGuide(t.guide ?? null);
+    engine.setSplitLabels(`Start ${fmtTime(t.cur.start, 2)}`, `End ${fmtTime(t.cur.end, 2)}`);
     engine.scrubSource(t.i, t.side === 'left' ? t.cur.start : Math.max(t.cur.start, t.cur.end - 0.05), false);
   };
   const trimMove = (e: PointerEvent) => {
@@ -924,7 +930,7 @@ export function Timeline() {
     const t = trimRef.current;
     if (!t || e.pointerId !== t.id) return;
     cancelAnimationFrame(t.raf);
-    engine.isolate = false;
+    engine.endSplit();
     trimRef.current = null;
     releaseHud();
     setTrim(null);
@@ -1019,6 +1025,30 @@ export function Timeline() {
     saveTlH();
   };
   /** Play deselects everything first; the layout settles for a couple of frames (the timeline would read that as a hand scroll and stop) and then it plays */
+  /** the mic: a tap starts recording at once (the timeline plays), another tap stops; held down it records until the finger lifts */
+  const micHold = useRef<{ t: number; wasOn: boolean } | null>(null);
+  const stopMic = () => {
+    endTake();
+    engine.pause();
+    set({ micOn: false });
+    say('Mic off');
+  };
+  const micDown = (e: PointerEvent) => {
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    const wasOn = getState().micOn;
+    micHold.current = { t: performance.now(), wasOn };
+    if (!wasOn) {
+      set({ micOn: true });
+      say('Recording');
+      void playTake();
+    }
+  };
+  const micUp = () => {
+    const h = micHold.current;
+    micHold.current = null;
+    if (!h) return;
+    if (h.wasOn || performance.now() - h.t > 350) stopMic();
+  };
   const startStop = () => {
     if (getState().playing) return say('Pause'), engine.pause();
     const g = getState();
@@ -1041,16 +1071,19 @@ export function Timeline() {
         <button class="play" onClick={startStop} aria-label={playing ? 'Pause' : 'Play'}>
           {playing ? <Pause /> : <Play />}
         </button>
+        {carrying ? (
+          <div class="drop-note bar">Drop onto the preview to add it as a layer at the yellow line</div>
+        ) : (
+          <>
         {micOn || !(selected >= 0 && multi.length === 0) ? (
           <button
             class={`tl-btn mode ${micOn ? 'on' : ''}`}
             aria-pressed={micOn}
-            aria-label="Record your voice while the timeline plays"
-            onClick={() => {
-              if (micOn) endTake();
-              set({ micOn: !micOn });
-              say(micOn ? 'Mic off' : 'Mic on: play to record');
-            }}
+            aria-label="Record your voice: tap to start, tap again to stop, or hold and let go to stop"
+            onPointerDown={micDown}
+            onPointerUp={micUp}
+            onPointerCancel={micUp}
+            onContextMenu={(e) => e.preventDefault()}
           >
             <MicIcon />
           </button>
@@ -1068,28 +1101,27 @@ export function Timeline() {
             <CropMode />
           </button>
         )}
-        {micOn ? (
-          <LevelBar read={micLevel} label="Microphone level" />
-        ) : (
-          <>
         {!hasSel && !gap ? (
-          <button class="tl-btn" disabled={tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
+          <button class="tl-btn" disabled={micOn || tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
             <Simplify />
           </button>
         ) : (
-          <button class="tl-btn" onClick={() => (gap ? (gap.lane ? removeLane() : removeGap()) : (engine.pause(), deleteClip(selected)))} aria-label={gap ? (gap.lane ? "Remove the empty lane" : "Remove the gap") : "Delete the selected clip"}>
+          <button class="tl-btn" disabled={micOn} onClick={() => (gap ? (gap.lane ? removeLane() : removeGap()) : (engine.pause(), deleteClip(selected)))} aria-label={gap ? (gap.lane ? "Remove the empty lane" : "Remove the gap") : "Delete the selected clip"}>
             <Trash />
           </button>
         )}
-        <button class="tl-btn" disabled={!canUndo} onClick={undo} aria-label="Undo">
-          <Undo />
-        </button>
-        <button class="tl-btn" disabled={!canRedo} onClick={redo} aria-label="Redo">
-          <Redo />
-        </button>
+        {!hasSel ? (
+          <button class="tl-btn" disabled={micOn} onClick={() => (engine.pause(), void pasteClipboard('time', true))} aria-label="Paste from the clipboard">
+            <PasteIcon />
+          </button>
+        ) : (
+          <button class="tl-btn" disabled={micOn} onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
+            <Copy />
+          </button>
+        )}
         <button
           class="tl-btn"
-          disabled={!hasSel && activeAt(clips, playhead).length === 0}
+          disabled={micOn || (!hasSel && activeAt(clips, playhead).length === 0)}
           onClick={() => {
             if (!splitAtPlayhead()) toast('Move the yellow line into this clip, away from its edges, to cut there.');
           }}
@@ -1097,15 +1129,12 @@ export function Timeline() {
         >
           <GapH />
         </button>
-        {!hasSel ? (
-          <button class="tl-btn" onClick={() => (engine.pause(), void pasteClipboard('time'))} aria-label="Paste from the clipboard">
-            <PasteIcon />
-          </button>
-        ) : (
-          <button class="tl-btn" onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
-            <Copy />
-          </button>
-        )}
+        <button class="tl-btn" disabled={micOn || !canUndo} onClick={undo} aria-label="Undo">
+          <Undo />
+        </button>
+        <button class="tl-btn" disabled={micOn || !canRedo} onClick={redo} aria-label="Redo">
+          <Redo />
+        </button>
           </>
         )}
         <div class="tl-grip" role="separator" aria-orientation="horizontal" aria-label="Pane divider: drag up or down to resize the preview and the timeline">
@@ -1131,7 +1160,7 @@ export function Timeline() {
               ))}
             </div>
             <div class="tl-void" style={{ left: 0, width: `${padL}px` }} />
-            <div class="tl-void" style={{ left: `${padL + total * pps}px`, right: 0 }} />
+            <div class="tl-void" style={{ left: `${padL + Math.max(total, trimEnd) * pps}px`, right: 0 }} />
             {lanes.map((track, row) => (
               <div key={track} data-track={track} class={`tl-lane ${move?.track === track ? 'target' : ''}`} style={{ top: `${rowTop(row)}px`, height: `${ROW}px` }} onClick={(e) => laneTap(e, track)}>
                 <span class="tl-lane-name">{track}</span>
@@ -1202,20 +1231,15 @@ export function Timeline() {
                     if (swallow.current) return;
                     engine.pause();
                     if (getState().multi.length > 0) return toggleMulti(i);
-                    // a second tap on the same strip within the window is a double tap: zoom so it spans the middle half of the timeline
-                    // (a single tap acts at once: it selects, and the yellow line glides to the strip)
-                    if (tapped.current === c.id) {
-                      tapped.current = null;
-                      clearTimeout(tapTimer.current);
-                      if (getState().selected !== i) selectClip(i, { keepPlayhead: true });
-                      return glideTo(i, true);
+                    // 1st tap: picks the strip and the yellow line glides to its start. Next tap (while picked): zoom so it fills the middle half.
+                    // When it is already zoomed like that, the tap lets go of it. So with the zoom in place, every tap toggles
+                    if (!on) {
+                      selectClip(i, { keepPlayhead: true });
+                      return glideTo(i, false);
                     }
-                    tapped.current = c.id;
-                    clearTimeout(tapTimer.current);
-                    tapTimer.current = window.setTimeout(() => (tapped.current = null), DOUBLE_MS);
-                    // a tap selects the strip and leaves the yellow line where it is; a tap on the picked strip lets it go and the yellow line glides to its start
-                    if (!on) selectClip(i, { keepPlayhead: true });
-                    else (deselect(), glideTo(i, false));
+                    const fit = Math.max(MIN_PPS, Math.min(MAX_PPS, (0.5 * viewW) / Math.max(0.05, clipDuration(c))));
+                    if (Math.abs(live.current.pps / fit - 1) > 0.04) return glideTo(i, true);
+                    deselect();
                   }}
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}

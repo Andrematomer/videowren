@@ -13,12 +13,14 @@ interface Entry {
   proxy: Blob | null;
   proxyUrl: string;
   bitmap: ImageBitmap | null;
+  /** a photo: its full-size picture is not kept (a few dozen of them are more memory than a phone gives a page), see mediaBitmap */
+  photo: boolean;
   /** a smaller copy of a big picture for the preview (the export uses the full one) */
   preview: ImageBitmap | null;
 }
 const entries = new Map<string, Entry>();
 
-export function registerMedia(id: string, blob: Blob, thumb: Blob | null, extra: { name?: string; proxy?: Blob | null; bitmap?: ImageBitmap | null } = {}): void {
+export function registerMedia(id: string, blob: Blob, thumb: Blob | null, extra: { name?: string; proxy?: Blob | null; bitmap?: ImageBitmap | null; photo?: boolean } = {}): void {
   dropMedia(id);
   const proxy = extra.proxy ?? null;
   entries.set(id, {
@@ -30,21 +32,35 @@ export function registerMedia(id: string, blob: Blob, thumb: Blob | null, extra:
     proxy,
     proxyUrl: proxy ? URL.createObjectURL(proxy) : '',
     bitmap: extra.bitmap ?? null,
+    photo: !!extra.photo,
     preview: null,
   });
-  // a phone photo is 12 megapixels: drawing that every frame is what makes playback stutter, so the preview gets a smaller copy
+  // a phone photo is 12 megapixels: drawing that every frame is what makes playback stutter, and keeping dozens of them decoded
+  // is more memory than iOS gives a page (the pictures then draw as nothing). So a photo keeps a small copy only; the big one is decoded again when needed.
   const bmp = extra.bitmap;
-  if (bmp && Math.max(bmp.width, bmp.height) > PREVIEW_PX) {
-    const k = PREVIEW_PX / Math.max(bmp.width, bmp.height);
-    void createImageBitmap(bmp, { resizeWidth: Math.max(1, Math.round(bmp.width * k)), resizeHeight: Math.max(1, Math.round(bmp.height * k)), resizeQuality: 'high' })
-      .then((small) => {
-        const e = entries.get(id);
-        if (e && e.bitmap === bmp) e.preview = small;
-        else small.close();
-      })
-      .catch(() => undefined);
+  if (bmp && extra.photo) {
+    const k = Math.min(1, PREVIEW_PX / Math.max(bmp.width, bmp.height));
+    const done = (small: ImageBitmap | null) => {
+      const e = entries.get(id);
+      if (e && e.bitmap === bmp) {
+        e.preview = small;
+        if (small) {
+          e.bitmap = null;
+          bmp.close();
+        }
+        previewReady();
+      } else small?.close();
+    };
+    createImageBitmap(bmp, { resizeWidth: Math.max(1, Math.round(bmp.width * k)), resizeHeight: Math.max(1, Math.round(bmp.height * k)), resizeQuality: 'high' }).then(done, () => done(null));
   }
 }
+let previewReady: () => void = () => undefined;
+let fullReady: () => void = () => undefined;
+/** called when a small or a full-size copy of a picture became available (the preview then draws again) */
+export const onPictureReady = (f: () => void): void => {
+  previewReady = f;
+  fullReady = f;
+};
 let PREVIEW_PX = 360;
 /** how big the picture drawn in the preview is for a photo (long side); set once at the start of the app */
 export const setPhotoPreviewPx = (n: number): void => {
@@ -63,7 +79,7 @@ export function setProxy(id: string, proxy: Blob): boolean {
 /** Forgets the small preview copy. Returns true if there was a video that can get a new one. */
 export function clearProxy(id: string): boolean {
   const e = entries.get(id);
-  if (!e || e.bitmap) return false;
+  if (!e || e.bitmap || e.photo) return false;
   if (e.proxyUrl) URL.revokeObjectURL(e.proxyUrl);
   e.proxy = null;
   e.proxyUrl = '';
@@ -130,7 +146,44 @@ export function mediaSkeleton(id: string, now: number, ready: () => void): HTMLC
   return undefined;
 }
 export const mediaPreviewBitmap = (id: string): ImageBitmap | undefined => entries.get(id)?.preview ?? entries.get(id)?.bitmap ?? undefined;
-export const mediaBitmap = (id: string): ImageBitmap | undefined => entries.get(id)?.bitmap ?? undefined;
+/** the full-size picture for a still frame: kept for the few most recent ones only; asked for again and drawn when it arrives */
+const fullCache = new Map<string, ImageBitmap>();
+const fullLoading = new Set<string>();
+export function mediaBitmap(id: string): ImageBitmap | undefined {
+  const e = entries.get(id);
+  if (!e) return undefined;
+  if (e.bitmap) return e.bitmap;
+  const c = fullCache.get(id);
+  if (c) {
+    fullCache.delete(id);
+    fullCache.set(id, c);
+    return c;
+  }
+  if (e.photo && !fullLoading.has(id)) {
+    fullLoading.add(id);
+    decodeImage(e.blob)
+      .then((b) => {
+        fullLoading.delete(id);
+        if (entries.get(id) !== e) return b.close();
+        fullCache.set(id, b);
+        while (fullCache.size > 3) {
+          const old = fullCache.keys().next().value as string;
+          fullCache.get(old)?.close();
+          fullCache.delete(old);
+        }
+        fullReady();
+      })
+      .catch(() => fullLoading.delete(id));
+  }
+  return undefined;
+}
+/** a private full-size copy for the export: the caller closes it */
+export async function mediaFullBitmap(id: string): Promise<ImageBitmap | undefined> {
+  const e = entries.get(id);
+  if (!e) return undefined;
+  if (e.bitmap) return e.bitmap;
+  return decodeImage(e.blob);
+}
 
 export function dropMedia(id: string): void {
   frames.delete(id);
@@ -140,6 +193,8 @@ export function dropMedia(id: string): void {
   URL.revokeObjectURL(e.url);
   if (e.proxyUrl) URL.revokeObjectURL(e.proxyUrl);
   e.bitmap?.close();
+  fullCache.get(id)?.close();
+  fullCache.delete(id);
   if (e.thumbUrl) URL.revokeObjectURL(e.thumbUrl);
   entries.delete(id);
 }

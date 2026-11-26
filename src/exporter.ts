@@ -16,7 +16,7 @@ import {
   type WrappedCanvas,
 } from 'mediabunny';
 import { audioBitrate, videoBitrate } from './bitrate.ts';
-import { mediaBitmap } from './media.ts';
+import { mediaEntry, mediaFullBitmap } from './media.ts';
 import { outputSize } from './geometry.ts';
 import { drawLayer } from './layers.ts';
 import { resample, timeStretch } from './stretch.ts';
@@ -51,7 +51,35 @@ interface Src {
   sink: CanvasSink | null;
   /** set for a still picture: the same picture is drawn on every frame */
   image: ImageBitmap | null;
+  /** a photo: decoded when a frame needs it (see exportImage), not all at once */
+  imageId?: string;
   at: InputAudioTrack | null;
+}
+
+/** photos of the export, decoded one by one and only a few at a time (all of them together would not fit in a phone's memory) */
+const exportPics = new Map<string, { bmp: ImageBitmap; own: boolean }>();
+async function exportImage(id: string): Promise<ImageBitmap | undefined> {
+  const hit = exportPics.get(id);
+  if (hit) {
+    exportPics.delete(id);
+    exportPics.set(id, hit);
+    return hit.bmp;
+  }
+  const bmp = await mediaFullBitmap(id);
+  if (!bmp) return undefined;
+  const entryBmp = mediaEntry(id)?.bitmap;
+  exportPics.set(id, { bmp, own: bmp !== entryBmp });
+  while (exportPics.size > 6) {
+    const k = exportPics.keys().next().value as string;
+    const old = exportPics.get(k)!;
+    if (old.own) old.bmp.close();
+    exportPics.delete(k);
+  }
+  return bmp;
+}
+function clearExportImages(): void {
+  for (const v of exportPics.values()) if (v.own) v.bmp.close();
+  exportPics.clear();
 }
 
 const abortError = () => new DOMException('Export cancelled', 'AbortError');
@@ -227,9 +255,8 @@ export async function exportProject(
       const blob = getBlob(id);
       if (!blob) throw new FriendlyError('A video file is missing. Remove that clip and add it again.');
       if (project.media[id]?.kind === 'image') {
-        const image = mediaBitmap(id);
-        if (!image) throw new FriendlyError('A picture is missing. Remove that clip and add it again.');
-        srcs.set(id, { input: null, sink: null, image, at: null });
+        if (!mediaEntry(id)) throw new FriendlyError('A picture is missing. Remove that clip and add it again.');
+        srcs.set(id, { input: null, sink: null, image: null, imageId: id, at: null });
         continue;
       }
       const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
@@ -288,8 +315,9 @@ export async function exportProject(
             if (project.media[clip.mediaId]?.kind === 'audio') continue;
             const o = { outW, outH, view: clip.view, keepBackground: true };
             const look = { opacity: clip.opacity, grade: clip.grade, fx: clip.fx, hq: true, crop: clip.crop };
-            if (src.image) {
-              drawLayer(ctx, src.image, src.image.width, src.image.height, look, o);
+            if (src.imageId) {
+              const img = await exportImage(src.imageId);
+              if (img) drawLayer(ctx, img, img.width, img.height, look, o);
               continue;
             }
             const srcT = sourceAt(clip, t);
@@ -334,6 +362,7 @@ export async function exportProject(
     }
   } finally {
     for (const s of srcs.values()) s.input?.dispose();
+    clearExportImages();
     await wake?.release().catch(() => {});
   }
   return { parts: results, warnings };
@@ -364,7 +393,7 @@ export async function exportFrame(project: Project, getBlob: (mediaId: string) =
       const o = { outW, outH, view: clip.view, keepBackground: true };
       const look = { opacity: clip.opacity, grade: clip.grade, fx: clip.fx, hq: true, crop: clip.crop };
       if (media.kind === 'image') {
-        const image = mediaBitmap(clip.mediaId);
+        const image = await exportImage(clip.mediaId);
         if (image) drawLayer(ctx, image, image.width, image.height, look, o);
         continue;
       }
@@ -386,6 +415,7 @@ export async function exportFrame(project: Project, getBlob: (mediaId: string) =
     }
   } finally {
     for (const r of readers) await r.close().catch(() => {});
+    clearExportImages();
     for (const i of inputs) (i as unknown as { dispose?: () => void }).dispose?.();
   }
   return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new FriendlyError('Could not make the picture.'))), 'image/png'));

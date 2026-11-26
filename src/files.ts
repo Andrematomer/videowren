@@ -19,7 +19,7 @@ export function onPicked(input: HTMLInputElement): void {
   input.value = '';
   const mode = pickMode;
   pickMode = 'end';
-  if (mode === 'tray') return void (files.length && set({ tray: files }));
+  if (mode === 'tray') return void (files.length > 1 ? set({ tray: files }) : files.length === 1 ? void importFiles(files, 'time') : undefined);
   void importFiles(files, mode);
 }
 
