@@ -1,3 +1,4 @@
+import { blockOtherFingers } from './block.ts';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { engine } from '../engine.ts';
 import { outputSize } from '../geometry.ts';
@@ -22,6 +23,53 @@ import { browserInfo, checkSupport } from '../support.ts';
 import qrcode from 'qrcode-generator';
 
 const support = checkSupport();
+
+/** the height of the timeline the person last chose (a handle let go that did not open the full preview) */
+const userTlH = (): number => {
+  try {
+    return Number(localStorage.getItem('pocket-cut-nla:tl-height')) || 200;
+  } catch {
+    return 200;
+  }
+};
+
+/** the box where a paste is done by hand: touch and hold, then Paste. That hands over every copied file at once, which the paste button of a web page cannot always read */
+function PasteCatcher() {
+  const open = useStore((s) => s.pasteCatch);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (open) window.setTimeout(() => box.current?.focus(), 50);
+  }, [open]);
+  if (!open) return null;
+  const close = () => set({ pasteCatch: false });
+  return (
+    <div class="paste-catch" onClick={close}>
+      <div class="paste-card" role="dialog" aria-label="Paste" onClick={(e) => e.stopPropagation()}>
+        <p>Touch and hold the box, then tap <b>Paste</b>.</p>
+        <div
+          ref={box}
+          class="paste-box"
+          contentEditable
+          role="textbox"
+          aria-label="Paste here"
+          onInput={(e) => ((e.currentTarget as HTMLElement).innerHTML = '')}
+          onPaste={(e) => {
+            e.preventDefault();
+            const dt = e.clipboardData;
+            close();
+            engine.pause();
+            void pasteFromEvent(dt).then((ok) => ok || say('The clipboard has no picture, video, sound or text.'));
+          }}
+        >
+          Paste here
+        </div>
+        <button class="cta ghost" onClick={close}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function App() {
   const ready = useStore((s) => s.ready);
@@ -65,6 +113,7 @@ export function App() {
   const busy = useStore((s) => s.busy);
   const [aimAt, setAimAt] = useState<{ x: number; y: number } | null>(null);
   const toast = useStore((s) => s.toast);
+  const [hAnim, setHAnim] = useState(false);
   const [tlH, setTlH] = useState(() => {
     try {
       return Number(localStorage.getItem('pocket-cut-nla:tl-height')) || 200;
@@ -174,10 +223,13 @@ export function App() {
       const kinds = kindsOf.length ? kindsOf : [false];
       const at = { x: pos.x - liftX(), y: pos.y - lift(), fx: pos.x, kinds, durs: dursOf };
       showDropPreview(w.lane ? { ...at, mode: 'lane' } : w.stage ? { ...at, mode: 'stage' } : null);
-      setAimAt(w.lane ? { x: pos.x, y: pos.y } : null); // a line from the finger to the outline only over the timeline
+      setAimAt(null);
       // held on the highest or lowest lane: a new lane opens now and then
       const lanes = [...document.querySelectorAll('.tl-lane')];
-      const side = lit && lit === lanes[0] ? 'top' : lit && lit === lanes[lanes.length - 1] ? 'bottom' : '';
+      // (only a finger really on the lane: empty space beside or under the lanes does not keep opening new ones)
+      const lr = lit?.getBoundingClientRect();
+      const inLane = !!lr && pos.y >= lr.top && pos.y <= lr.bottom;
+      const side = inLane && lit === lanes[0] ? 'top' : inLane && lit === lanes[lanes.length - 1] ? 'bottom' : '';
       if (!side) edge = null;
       else if (!edge || edge.side !== side) edge = { side, since: performance.now() };
       else if (performance.now() - edge.since > 420) {
@@ -228,10 +280,45 @@ export function App() {
 
   // the handle under the preview: drag to give the timeline or the preview more room
   useEffect(() => {
-    const f = (e: Event) => setTlH((e as CustomEvent<number>).detail);
+    // a number: the finger moves the handle (no easing); {h, anim}: the handle slides there by itself
+    const f = (e: Event) => {
+      const d = (e as CustomEvent<number | { h: number; anim: boolean }>).detail;
+      setHAnim(typeof d !== 'number' && d.anim);
+      setTlH(typeof d === 'number' ? d : d.h);
+    };
     window.addEventListener('pc-tl-height', f);
     return () => window.removeEventListener('pc-tl-height', f);
   }, []);
+  // recording: only the play and mic buttons work, so a new finger cannot upset the take
+  const micOnNow = useStore((s) => s.micOn);
+  useEffect(() => {
+    if (!micOnNow) return;
+    return blockOtherFingers((el) => !!el.closest('.tl-bar .play, .tl-bar .tl-btn.mode'));
+  }, [micOnNow]);
+  // a strip carried up over the preview: the same, only its own finger works
+  const carryingNow = useStore((s) => s.carrying);
+  useEffect(() => {
+    if (carryingNow !== 'strip') return;
+    return blockOtherFingers((el) => !!el.closest('.strip-clip'));
+  }, [carryingNow]);
+  // carrying a card from the Import tab: the timeline becomes twice as tall as the preview (the strips are bigger to aim at); let go: back to the person's own height
+  const carrying = useStore((s) => s.carrying);
+  const wasCarrying = useRef(false);
+  useEffect(() => {
+    if (carrying === 'tray') {
+      wasCarrying.current = true;
+      const app = document.querySelector('.app');
+      const stage = document.querySelector('.stage') as HTMLElement | null;
+      if (!app || !stage) return;
+      const cs = getComputedStyle(stage);
+      const cur = parseFloat(getComputedStyle(app).getPropertyValue('--tl-h')) || 200;
+      const room = stage.clientHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0) + cur;
+      window.dispatchEvent(new CustomEvent('pc-tl-height', { detail: { h: Math.round((room * 2) / 3), anim: true } }));
+    } else if (wasCarrying.current) {
+      wasCarrying.current = false;
+      window.dispatchEvent(new CustomEvent('pc-tl-height', { detail: { h: userTlH(), anim: true } }));
+    }
+  }, [carrying]);
 
   // a tap on anything that is not a control (empty space around the canvas, the bars, the timeline background) selects nothing
   useEffect(() => {
@@ -240,7 +327,7 @@ export function App() {
       if (!el || !el.closest) return;
       // the tapped control may have been redrawn (a new icon) before this listener ran: it was a control, not empty space
       if (!el.isConnected) return;
-      if (el.closest('button, a, input, label, textarea, select, .strip-clip, .frame, .tl-scroll, .tl-bar, .tl-gap, .drawer, .tabbar, .toast, .add-menu')) return;
+      if (el.closest('button, a, input, label, textarea, select, .strip-clip, .frame, .tl-scroll, .tl-bar, .tl-gap, .drawer, .tabbar, .toast, .add-menu, .paste-catch')) return;
       deselect();
     };
     // a picked gap is let go by the next touch anywhere (except on the gap itself, which holds the trash can)
@@ -308,7 +395,7 @@ export function App() {
       else if (mod || e.altKey) return;
       else if (k === ' ') (e.preventDefault(), g.playing ? engine.pause() : void engine.play());
       else if (k === 's') splitAtPlayhead();
-      else if (k === 'f') (e.preventDefault(), g.focus ? (window.dispatchEvent(new CustomEvent('pc-tl-height', { detail: 200 })), set({ focus: false })) : set({ focus: true, drawer: null, sheet: 'none' }));
+      else if (k === 'f') (e.preventDefault(), g.focus ? (window.dispatchEvent(new CustomEvent('pc-tl-height', { detail: { h: userTlH(), anim: true } })), set({ focus: false })) : set({ focus: true, drawer: null, sheet: 'none' }));
       else if (k === 'delete' || k === 'backspace') {
         e.preventDefault();
         if (g.gap) g.gap.lane ? removeLane() : removeGap();
@@ -334,8 +421,9 @@ export function App() {
   }, []);
 
   return (
-    <div class={`app ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
+    <div class={`app ${hAnim ? 'h-anim' : ''} ${locked ? 'locked' : ''} ${slide ? 'slide' : ''} ${turn ? (turn > 0 ? 'turned-cw' : 'turned-ccw') : ''}`} style={{ '--tl-h': `${tlH}px` } as Record<string, string>}>
       <FilePicker />
+      <PasteCatcher />
       {dropping && <div class="drop-veil"><span>Drop to import</span></div>}
       {aimAt && lift() > 0 && <AimLine from={aimAt} />}
       {locked && <div class="lock-veil" />}
@@ -574,7 +662,7 @@ function FocusBar() {
       <button class="tl-btn" onClick={() => (engine.pause(), void saveFrame())} aria-label="Save this frame as a picture">
         <Camera />
       </button>
-      <button class="tl-btn exit" onClick={() => (window.dispatchEvent(new CustomEvent('pc-tl-height', { detail: 200 })), set({ focus: false }))} aria-label="Leave full preview">
+      <button class="tl-btn exit" onClick={() => (window.dispatchEvent(new CustomEvent('pc-tl-height', { detail: { h: userTlH(), anim: true } })), set({ focus: false }))} aria-label="Leave full preview">
         <Shrink />
       </button>
     </div>

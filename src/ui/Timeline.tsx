@@ -7,11 +7,11 @@ import { optimizeWithFeedback, pasteClipboard, deleteClip, deselect, duplicateCl
 import { PEAKS_PER_SEC } from '../wave.ts';
 import { MIN_CLIP, activeAt, optimizeLanes, clipDuration, clipEnd, fmtTime, gapAt, laneRemovable, stackTracks, totalOf } from '../timeline.ts';
 import type { Clip, MediaInfo } from '../types.ts';
-import { aim } from '../dropAim.ts';
-import { LevelBar } from './LevelBar.tsx';
-import { endTake, micLevel, playTake } from '../recorder.ts';
+import { aim, showDropPreview, whereAt } from '../dropAim.ts';
+import { endTake, playTake, recordingSeconds } from '../recorder.ts';
+import { fitFill } from './Preview.tsx';
 import { Pie } from './Pie.tsx';
-import { MicIcon, CropMode, Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
+import { MicIcon, Maximize, Copy, GapH, Pause, PasteIcon, Play, Redo, Simplify, Trash, Undo } from './icons.tsx';
 import { haptic, hapticDouble, snapTicker } from '../haptic.ts';
 import { outputSize } from '../geometry.ts';
 
@@ -69,6 +69,24 @@ export function lanesFor(clips: Clip[], extra = { hi: 0, lo: 0 }): number[] {
 /** only strips that have a running time (video, sound) can slide their content: pictures, text and colors have none */
 const slippable = (m: { kind?: string; text?: unknown; solid?: unknown } | undefined): boolean => !!m && m.kind !== 'image' && m.text === undefined && m.solid === undefined;
 
+/** the middle bar while the microphone is on: what is happening, and how long the take is */
+function RecNote() {
+  const recording = useStore((s) => s.recording);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const i = window.setInterval(() => tick((n) => n + 1), 100);
+    return () => window.clearInterval(i);
+  }, []);
+  const sec = recordingSeconds();
+  return (
+    <div class="rec-note" role="status">
+      <span class={`rec-dot ${recording ? '' : 'off'}`} />
+      {recording ? 'Recording' : 'Mic on, press play'}
+      {recording && <span class="num">{fmtTime(sec, 1)}</span>}
+    </div>
+  );
+}
+
 export function Timeline() {
   const clips = useStore((s) => s.project.clips);
   const media = useStore((s) => s.project.media);
@@ -77,6 +95,7 @@ export function Timeline() {
   const playing = useStore((s) => s.playing);
   const micOn = useStore((s) => s.micOn);
   const carrying = useStore((s) => s.carrying);
+  const dragMax = useRef(0);
   const recording = useStore((s) => s.recording);
   const progress = useStore((s) => s.proxyProgress);
   const gap = useStore((s) => s.gap);
@@ -105,7 +124,7 @@ export function Timeline() {
   const [slip, setSlip] = useState<number | null>(null);
   const [viewW, setViewW] = useState(360);
   const scroller = useRef<HTMLDivElement>(null);
-  const st = useRef<{ id: number; i: number; x0: number; y0: number; x: number; y: number; at0: number; track0: number; scroll0: number; scrollTop0: number; timer: number; active: boolean; raf: number; grab?: number; edge?: 'top' | 'bottom' | null; edgeAt?: number } | null>(null);
+  const st = useRef<{ id: number; i: number; x0: number; y0: number; x: number; y: number; at0: number; track0: number; scroll0: number; scrollTop0: number; timer: number; active: boolean; raf: number; grab?: number; edge?: 'top' | 'bottom' | null; edgeAt?: number; stage?: boolean; pvAt?: number } | null>(null);
   const swallow = useRef(false);
 
   const prefRow = useStore((s) => s.prefs.rowScale);
@@ -129,7 +148,7 @@ export function Timeline() {
     const D = 3; // the length of an outline: the real length is only known after the files are read
     let was = '';
     const prev = (e: Event) => {
-      const d = (e as CustomEvent<{ x: number; y: number; kinds: boolean[]; durs?: number[]; mode: 'lane' | 'stage' } | null>).detail;
+      const d = (e as CustomEvent<{ x: number; y: number; kinds: boolean[]; durs?: number[]; mode: 'lane' | 'stage'; quiet?: boolean } | null>).detail;
       const el = scroller.current;
       const L = live.current;
       if (!d || !el) {
@@ -155,7 +174,7 @@ export function Timeline() {
         const bottom = Math.min(...placed.map((c) => c.track), lanesFor(L.clips).at(-1)!);
         const baseTop = lanesFor(L.clips)[0]!;
         const baseBottom = lanesFor(L.clips).at(-1)!;
-        setExt((x) => {
+        if (!d.quiet) setExt((x) => {
           const n = { hi: Math.max(0, top - baseTop), lo: Math.max(0, baseBottom - bottom) };
           return n.hi === x.hi && n.lo === x.lo ? x : n;
         });
@@ -164,7 +183,7 @@ export function Timeline() {
       }
       // over a lane: the first file starts under the finger (snapping to strip edges and the yellow line), the rest follow it
       const r = el.getBoundingClientRect();
-      const row = Math.floor((d.y - r.top + el.scrollTop - RULER) / (L.ROW + GAP));
+      const row = Math.max(0, Math.min(L.lanes.length - 1, Math.floor((d.y - r.top + el.scrollTop - RULER) / (L.ROW + GAP))));
       const track = L.lanes[row];
       if (track === undefined) {
         aim.value = null;
@@ -240,7 +259,9 @@ export function Timeline() {
   // the end of the timeline follows an edge that is being pulled out, so there is room to scroll after it
   const trimEnd = trim && clips[trim.index] ? trim.at + (trim.end - trim.start) / clips[trim.index]!.speed : 0;
   const ghostEnd = ghosts.reduce((m, g) => Math.max(m, g.at + g.dur), 0);
-  const extent = Math.max(total, trimEnd, ghostEnd, recording ? playhead + 5 : 0, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
+  // while something is carried the end never moves back (the timeline would jump under the finger when it is pulled back from a far place)
+  dragMax.current = carrying ? Math.max(dragMax.current, ghostEnd) : 0;
+  const extent = Math.max(total, trimEnd, dragMax.current, recording ? playhead + 5 : 0, move ? move.at + (clips[move.index] ? clipDuration(clips[move.index]!) : 0) : 0);
   const width = extent * pps + viewW;
   const height = RULER + lanes.length * (ROW + GAP) + 6;
   const live = useRef({ clips, pps, lanes, playhead, media, padL, height, width, ROW, extent });
@@ -280,6 +301,8 @@ export function Timeline() {
 
   /** tapping a strip: the position slides to its start while the zoom changes so the strip fills the middle half (25% to 75%) of the width */
   const glide = useRef(0);
+  /** the zoom before an edit mode zoomed in, to go back to */
+  const autoZoom = useRef<{ before: number; applied: number } | null>(null);
   const glideTo = (index: number, zoom: boolean) => {
     const c = live.current.clips[index];
     if (!c) return;
@@ -307,6 +330,26 @@ export function Timeline() {
     };
     glide.current = requestAnimationFrame(tick);
   };
+
+  // leaving edit mode brings back the zoom from before (when it was not changed by hand meanwhile)
+  const handlesNow = useStore((s) => s.handles);
+  useEffect(() => {
+    if (handlesNow) return;
+    const z = autoZoom.current;
+    autoZoom.current = null;
+    if (!z || Math.abs(live.current.pps / z.applied - 1) > 0.03) return;
+    const p0 = live.current.pps;
+    const t0 = performance.now();
+    cancelAnimationFrame(glide.current);
+    const tick = () => {
+      const k = Math.min(1, (performance.now() - t0) / 300);
+      const e = 1 - Math.pow(1 - k, 3);
+      lastUser.current = 0;
+      setPps(p0 * Math.pow(z.before / p0, e));
+      if (k < 1) glide.current = requestAnimationFrame(tick);
+    };
+    glide.current = requestAnimationFrame(tick);
+  }, [handlesNow]);
 
   // the person scrolled: the position follows (one preview refresh per frame at most)
   const seekFrame = useRef(0);
@@ -362,7 +405,7 @@ export function Timeline() {
     }
     // moving around the timeline by hand leaves nothing selected (a strip being dragged or trimmed stays)
     const g = getState();
-    if ((g.selected >= 0 || g.gap) && g.multi.length === 0 && !st.current?.active && !trimRef.current && !boxRef.current?.active) deselect();
+    if (g.gap && g.multi.length === 0 && !st.current?.active && !trimRef.current && !boxRef.current?.active) deselect(); // a picked gap is let go; a picked strip stays picked
     set({ playhead: at });
     // the content keeps following the finger, the line holds on the strip edge; when the hand lets go, the content slides to the line
     lastUser.current = performance.now();
@@ -716,6 +759,18 @@ export function Timeline() {
     }
     moveTick.current(sn.guide);
     setMove({ index: s.i, at, track, top, guide: sn.guide });
+    // carried up over the preview: it would go to the yellow line on a layer of its own (the same outline as a card from the Import tab)
+    const single = getState().multi.length <= 1;
+    const onStage = single && s.y < r.top - 4 && !!whereAt(s.x, s.y).stage;
+    if (onStage !== !!s.stage) {
+      s.stage = onStage;
+      set({ carrying: onStage ? 'strip' : false });
+      if (!onStage) showDropPreview(null);
+    }
+    if (onStage && now - (s.pvAt ?? 0) > 90) {
+      s.pvAt = now;
+      showDropPreview({ x: s.x, y: s.y, fx: s.x, kinds: [live.current.media[clip.mediaId]?.kind === 'audio'], durs: [clipDuration(clip)], mode: 'stage', quiet: true });
+    }
     s.raf = requestAnimationFrame(frame);
   };
 
@@ -729,8 +784,22 @@ export function Timeline() {
     if (s.active) {
       swallow.current = true;
       setTimeout(() => (swallow.current = false), 0);
+      const onStage = !!s.stage;
+      if (onStage) {
+        showDropPreview(null);
+        set({ carrying: false });
+        if (commit) {
+          const c = live.current.clips[s.i];
+          const audio = c && live.current.media[c.mediaId]?.kind === 'audio';
+          if (c) {
+            const at = Math.round(live.current.playhead * 100) / 100;
+            const [track] = stackTracks(live.current.clips.filter((_, k) => k !== s.i), [{ at, dur: clipDuration(c) }], audio ? -1 : 0);
+            moveClipTo(s.i, at, track!);
+          }
+        }
+      }
       setMove((d) => {
-        if (commit && d) {
+        if (commit && d && !onStage) {
           const c = live.current.clips[d.index];
           if (c && (d.at !== c.at || d.track !== c.track)) (getState().multi.includes(c.id) ? moveMulti : moveClipTo)(d.index, d.at, d.track);
         }
@@ -773,6 +842,23 @@ export function Timeline() {
       } catch {
         /* not supported */
       }
+      // the strip's own element may be redrawn while it is carried (lanes opening, the bars changing): the end of the touch and its moves are also
+      // listened for on the window, so a carried strip can never be left hanging
+      const winMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== s.id || !st.current || st.current !== s) return;
+        s.x = ev.clientX;
+        s.y = ev.clientY;
+      };
+      const winUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== s.id) return;
+        window.removeEventListener('pointermove', winMove, true);
+        window.removeEventListener('pointerup', winUp, true);
+        window.removeEventListener('pointercancel', winUp, true);
+        if (st.current === s) finish(ev.type === 'pointerup');
+      };
+      window.addEventListener('pointermove', winMove, true);
+      window.addEventListener('pointerup', winUp, true);
+      window.addEventListener('pointercancel', winUp, true);
       const row = live.current.lanes.indexOf(clip.track);
       s.grab = (s.y0 - el.getBoundingClientRect().top + el.scrollTop - rowTop(row)) / ROW;
       setMove({ index: i, at: clip.at, track: clip.track, top: rowTop(row), guide: null });
@@ -837,7 +923,7 @@ export function Timeline() {
 
   // ---------- trimming with the handles of the selected strip ----------
 
-  const trimRef = useRef<{ id: number; i: number; side: 'left' | 'right'; x0: number; x: number; scroll0: number; raf: number; base: { at: number; start: number; end: number }; cur: Trim; guide?: number | null } | null>(null);
+  const trimRef = useRef<{ id: number; i: number; side: 'left' | 'right'; x0: number; x: number; scroll0: number; raf: number; base: { at: number; start: number; end: number }; cur: Trim; guide?: number | null; seen?: boolean } | null>(null);
   const [trimGuide, setTrimGuide] = useState<number | null>(null);
 
   const solveTrim = (t: NonNullable<typeof trimRef.current>, dx: number): Trim => {
@@ -912,7 +998,11 @@ export function Timeline() {
     t.raf = requestAnimationFrame(trimFrame);
   };
   const applyTrim = (t: NonNullable<typeof trimRef.current>) => {
+    const prev = t.cur;
     t.cur = solveTrim(t, t.x - t.x0 + ((scroller.current?.scrollLeft ?? 0) - t.scroll0));
+    // the edge is at its lowest or highest possible place and the finger keeps pushing: nothing changes, so the picture is not looked up again
+    if (t.seen && prev.at === t.cur.at && prev.start === t.cur.start && prev.end === t.cur.end) return;
+    t.seen = true;
     setTrim(t.cur);
     hold(`Trim ${fmtTime((t.cur.end - t.cur.start) / (live.current.clips[t.i]?.speed ?? 1), 2)}`);
     trimTick.current(t.guide ?? null);
@@ -1025,29 +1115,17 @@ export function Timeline() {
     saveTlH();
   };
   /** Play deselects everything first; the layout settles for a couple of frames (the timeline would read that as a hand scroll and stop) and then it plays */
-  /** the mic: a tap starts recording at once (the timeline plays), another tap stops; held down it records until the finger lifts */
-  const micHold = useRef<{ t: number; wasOn: boolean } | null>(null);
+  /** the mic: a tap starts recording at once (the timeline plays, silent), another tap stops */
   const stopMic = () => {
+    set({ micOn: false });
     endTake();
     engine.pause();
-    set({ micOn: false });
     say('Mic off');
   };
-  const micDown = (e: PointerEvent) => {
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    const wasOn = getState().micOn;
-    micHold.current = { t: performance.now(), wasOn };
-    if (!wasOn) {
-      set({ micOn: true });
-      say('Recording');
-      void playTake();
-    }
-  };
-  const micUp = () => {
-    const h = micHold.current;
-    micHold.current = null;
-    if (!h) return;
-    if (h.wasOn || performance.now() - h.t > 350) stopMic();
+  const startMic = () => {
+    set({ micOn: true });
+    say('Recording');
+    void playTake();
   };
   const startStop = () => {
     if (getState().playing) return say('Pause'), engine.pause();
@@ -1068,78 +1146,67 @@ export function Timeline() {
   return (
     <div class={`tl ${move ? 'dragging' : ''}`}>
       <div class="tl-bar" onPointerDown={barDown} onPointerMove={barMove} onPointerUp={barUp} onPointerCancel={barUp}>
-        <button class="play" onClick={startStop} aria-label={playing ? 'Pause' : 'Play'}>
-          {playing ? <Pause /> : <Play />}
-        </button>
         {carrying ? (
-          <div class="drop-note bar">Drop onto the preview to add it as a layer at the yellow line</div>
+          <div class="drop-note bar">{carrying === 'strip' ? 'Drop onto the preview to put it at the yellow line, on its own layer' : 'Drop onto the preview to add it as a layer at the yellow line'}</div>
         ) : (
           <>
-        {micOn || !(selected >= 0 && multi.length === 0) ? (
-          <button
-            class={`tl-btn mode ${micOn ? 'on' : ''}`}
-            aria-pressed={micOn}
-            aria-label="Record your voice: tap to start, tap again to stop, or hold and let go to stop"
-            onPointerDown={micDown}
-            onPointerUp={micUp}
-            onPointerCancel={micUp}
-            onContextMenu={(e) => e.preventDefault()}
-          >
-            <MicIcon />
-          </button>
-        ) : (
-          <button
-            class={`tl-btn mode ${handles ? 'on' : ''}`}
-            aria-pressed={handles}
-            aria-label="Edit mode: trim, crop and slide the picked strip"
-            onClick={() => {
-              const h = !getState().handles;
-              set({ handles: h });
-              say(h ? 'Edit mode' : 'Select mode');
-            }}
-          >
-            <CropMode />
-          </button>
-        )}
-        {!hasSel && !gap ? (
-          <button class="tl-btn" disabled={micOn || tight} onClick={optimizeWithFeedback} aria-label={tight ? "Simplify timeline (the lanes are already as tight as they can be)" : "Simplify timeline"}>
-            <Simplify />
-          </button>
-        ) : (
-          <button class="tl-btn" disabled={micOn} onClick={() => (gap ? (gap.lane ? removeLane() : removeGap()) : (engine.pause(), deleteClip(selected)))} aria-label={gap ? (gap.lane ? "Remove the empty lane" : "Remove the gap") : "Delete the selected clip"}>
-            <Trash />
-          </button>
-        )}
-        {!hasSel ? (
-          <button class="tl-btn" disabled={micOn} onClick={() => (engine.pause(), void pasteClipboard('time', true))} aria-label="Paste from the clipboard">
-            <PasteIcon />
-          </button>
-        ) : (
-          <button class="tl-btn" disabled={micOn} onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
-            <Copy />
-          </button>
-        )}
-        <button
-          class="tl-btn"
-          disabled={micOn || (!hasSel && activeAt(clips, playhead).length === 0)}
-          onClick={() => {
-            if (!splitAtPlayhead()) toast('Move the yellow line into this clip, away from its edges, to cut there.');
-          }}
-          aria-label="Split at the yellow line"
-        >
-          <GapH />
-        </button>
-        <button class="tl-btn" disabled={micOn || !canUndo} onClick={undo} aria-label="Undo">
-          <Undo />
-        </button>
-        <button class="tl-btn" disabled={micOn || !canRedo} onClick={redo} aria-label="Redo">
-          <Redo />
-        </button>
+            <button class="play" onClick={startStop} aria-label={playing ? 'Pause' : 'Play'}>
+              {playing ? <Pause /> : <Play />}
+            </button>
+            {micOn || !(selected >= 0) ? (
+              <button class={`tl-btn mode ${micOn ? 'on' : ''}`} aria-pressed={micOn} aria-label={micOn ? 'Stop recording' : 'Record your voice while the timeline plays'} onClick={() => (micOn ? stopMic() : startMic())}>
+                <MicIcon />
+              </button>
+            ) : (
+              <button class="tl-btn mode" aria-label="Switch between fit and fill" onClick={() => (engine.pause(), fitFill())}>
+                <Maximize />
+              </button>
+            )}
+            {micOn ? (
+              <RecNote />
+            ) : (
+              <>
+                {!hasSel && !gap ? (
+                  <button class="tl-btn" disabled={tight} onClick={optimizeWithFeedback} aria-label={tight ? 'Simplify timeline (the lanes are already as tight as they can be)' : 'Simplify timeline'}>
+                    <Simplify />
+                  </button>
+                ) : (
+                  <button class="tl-btn" onClick={() => (gap ? (gap.lane ? removeLane() : removeGap()) : (engine.pause(), deleteClip(selected)))} aria-label={gap ? (gap.lane ? 'Remove the empty lane' : 'Remove the gap') : 'Delete the selected clip'}>
+                    <Trash />
+                  </button>
+                )}
+                {!hasSel ? (
+                  <button class="tl-btn" onClick={() => (engine.pause(), void pasteClipboard('time', true))} aria-label="Paste from the clipboard">
+                    <PasteIcon />
+                  </button>
+                ) : (
+                  <button class="tl-btn" onClick={() => (engine.pause(), duplicateClip(selected))} aria-label="Duplicate the selected clip">
+                    <Copy />
+                  </button>
+                )}
+                <button
+                  class="tl-btn"
+                  disabled={!hasSel && activeAt(clips, playhead).length === 0}
+                  onClick={() => {
+                    if (!splitAtPlayhead()) toast('Move the yellow line into this clip, away from its edges, to cut there.');
+                  }}
+                  aria-label="Split at the yellow line"
+                >
+                  <GapH />
+                </button>
+                <button class="tl-btn" disabled={!canUndo} onClick={undo} aria-label="Undo">
+                  <Undo />
+                </button>
+                <button class="tl-btn" disabled={!canRedo} onClick={redo} aria-label="Redo">
+                  <Redo />
+                </button>
+                <div class="tl-grip" role="separator" aria-orientation="horizontal" aria-label="Pane divider: drag up or down to resize the preview and the timeline">
+                  <span aria-hidden="true">⇕</span>
+                </div>
+              </>
+            )}
           </>
         )}
-        <div class="tl-grip" role="separator" aria-orientation="horizontal" aria-label="Pane divider: drag up or down to resize the preview and the timeline">
-          <span aria-hidden="true">⇕</span>
-        </div>
       </div>
       {arrow && (
         <div class={`div-arrow ${arrow.ping ? 'ping' : ''}`} style={{ left: `${arrow.x}px`, top: `${arrow.y}px` }} aria-hidden="true">
@@ -1231,15 +1298,19 @@ export function Timeline() {
                     if (swallow.current) return;
                     engine.pause();
                     if (getState().multi.length > 0) return toggleMulti(i);
-                    // 1st tap: picks the strip and the yellow line glides to its start. Next tap (while picked): zoom so it fills the middle half.
-                    // When it is already zoomed like that, the tap lets go of it. So with the zoom in place, every tap toggles
+                    // 1st tap: picks the strip and the yellow line glides to its start. Taps after that switch between select mode and edit mode;
+                    // going into edit mode also zooms the strip to the middle of the timeline, and going out brings the old zoom back (unless it was changed by hand since)
                     if (!on) {
                       selectClip(i, { keepPlayhead: true });
                       return glideTo(i, false);
                     }
-                    const fit = Math.max(MIN_PPS, Math.min(MAX_PPS, (0.5 * viewW) / Math.max(0.05, clipDuration(c))));
-                    if (Math.abs(live.current.pps / fit - 1) > 0.04) return glideTo(i, true);
-                    deselect();
+                    if (!getState().handles) {
+                      const fit = Math.max(MIN_PPS, Math.min(MAX_PPS, (0.5 * viewW) / Math.max(0.05, clipDuration(c))));
+                      if (Math.abs(live.current.pps / fit - 1) > 0.04) autoZoom.current = { before: live.current.pps, applied: fit };
+                      set({ handles: true });
+                      return glideTo(i, true);
+                    }
+                    set({ handles: false });
                   }}
                 >
                   {wave && <Wave peaks={wave} from={start} to={end} width={w} />}

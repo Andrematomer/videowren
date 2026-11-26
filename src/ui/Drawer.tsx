@@ -71,7 +71,7 @@ export function TabBar() {
   if (carrying) {
     return (
       <nav class="tabbar meter drop-note" aria-live="polite">
-        Drop onto the timeline to put it at that spot
+        {carrying === 'strip' ? 'Let go over the preview to put it on a layer of its own' : 'Drop onto the timeline to put it at that spot'}
       </nav>
     );
   }
@@ -123,27 +123,17 @@ export function TabBar() {
   );
 }
 
-/** A name that resets its slider when tapped twice (as in DaVinci Resolve). */
+/** A name that resets its slider when tapped (one tap: a second tap in a row is easy to mistake for the browser's own double-tap gestures) */
 function ResetLabel({ label, onReset }: { label: string; onReset: () => void }) {
-  const last = useRef(0);
   return (
-    <span
-      class="dlabel"
-      onPointerUp={() => {
-        const now = performance.now();
-        if (now - last.current < 380) {
-          last.current = 0;
-          onReset();
-        } else last.current = now;
-      }}
-    >
+    <span class="dlabel" role="button" tabIndex={-1} onClick={onReset}>
       {label}
     </span>
   );
 }
 
 /** The system's own color picker: one swatch showing the current color. */
-function ColorRow({ value, onPick, label }: { value: string; onPick: (c: string) => void; label: string }) {
+function ColorRow({ value, onPick, label, title }: { value: string; onPick: (c: string) => void; label: string; title?: string }) {
   const timer = useRef(0);
   const [live, setLive] = useState(value);
   useEffect(() => setLive(value), [value]);
@@ -153,7 +143,8 @@ function ColorRow({ value, onPick, label }: { value: string; onPick: (c: string)
     timer.current = window.setTimeout(() => onPick(c), 120);
   };
   return (
-    <div class="color-row" role="group" aria-label={label}>
+    <div class={`color-row ${title ? 'titled' : ''}`} role="group" aria-label={label}>
+      {title && <span class="color-title">{title}</span>}
       <label class="swatch custom on" style={{ background: live }} aria-label={label}>
         <input type="color" value={live} onInput={(e) => pick((e.currentTarget as HTMLInputElement).value)} />
       </label>
@@ -301,19 +292,19 @@ export function Drawer() {
             {media.solid !== undefined ? (
               <ColorRow label="Color" value={media.solid} onPick={(c) => each((i) => void setSolidColor(i, c))} />
             ) : (
-              <ColorRow label="Text color" value={textColor} onPick={(c) => each((i) => void editText(i, { color: c }))} />
-            )}
-            {media.solid === undefined && (
               <>
-            {row('Thickness', `${outlineWidth}`, () => each((i) => void editText(i, { width: 14 })), <Slider label="Outline thickness" value={outlineWidth} min={0} max={40} step={1} fineStep={0.5} snaps={[0, 14]} snapPx={10} valueText={`${outlineWidth}`} onChange={(v) => {
-              const w = Math.round(v);
-              const my = ++owSeq.current;
-              setOw(w);
-              void Promise.all(
-                (targets().length > 1 ? targets() : [index]).map((i) => editText(i, { width: w })),
-              ).then(() => owSeq.current === my && setOw(null));
-            }} />)}
-            <ColorRow label="Outline color" value={outlineColor} onPick={(c) => each((i) => void editText(i, { outline: c }))} />
+                <div class="color-pair">
+                  <ColorRow title="Fill" label="Text fill color" value={textColor} onPick={(c) => each((i) => void editText(i, { color: c }))} />
+                  <ColorRow title="Outline" label="Outline color" value={outlineColor} onPick={(c) => each((i) => void editText(i, { outline: c }))} />
+                </div>
+                {row('Outline thickness', `${outlineWidth}`, () => each((i) => void editText(i, { width: 14 })), <Slider label="Outline thickness" value={outlineWidth} min={0} max={40} step={1} fineStep={0.5} snaps={[0, 14]} snapPx={10} valueText={`${outlineWidth}`} onChange={(v) => {
+                  const w = Math.round(v);
+                  const my = ++owSeq.current;
+                  setOw(w);
+                  void Promise.all(
+                    (targets().length > 1 ? targets() : [index]).map((i) => editText(i, { width: w })),
+                  ).then(() => owSeq.current === my && setOw(null));
+                }} />)}
               </>
             )}
           </section>
@@ -356,7 +347,7 @@ export function Drawer() {
             {fxRow('Pixelate', 'pixelate')}
             {fxRow('Emboss', 'emboss', true)}
             {fxRow('Color split', 'chroma', true)}
-            <p class="hint">Tap a name twice to reset that slider.</p>
+            <p class="hint">Tap a name to reset that slider.</p>
           </section>
         )}
 
@@ -367,7 +358,7 @@ export function Drawer() {
             {gradeRow('Contrast', 'contrast')}
             {gradeRow('Color', 'saturation')}
             {gradeRow('Warmth', 'warmth')}
-            <p class="hint">Tap a name twice to reset that slider.</p>
+            <p class="hint">Tap a name to reset that slider.</p>
           </section>
         )}
         </div>

@@ -257,6 +257,11 @@ export const MicIcon = ({ size }: { size?: number }) => (
     <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4" />
   </I>
 );
+export const Maximize = ({ size }: { size?: number }) => (
+  <I size={size}>
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </I>
+);
 export const SpeakerIcon = ({ size }: { size?: number }) => (
   <I size={size}>
     <path d="M4 9v6h4l5 4V5L8 9H4z" />

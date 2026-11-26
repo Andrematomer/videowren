@@ -52,7 +52,9 @@ export interface State {
   /** the mic button in the middle bar is on: playing records a voice on the timeline */
   micOn: boolean;
   /** an Import card is being carried over the app */
-  carrying: boolean;
+  carrying: false | 'tray' | 'strip';
+  /** the box that takes a paste by hand (the clipboard could not be read by the button) is open */
+  pasteCatch: boolean;
   /** a voice is being recorded onto the timeline; the take began at `at` seconds */
   recording: { at: number } | null;
   /** the crop handles are shown on the preview */
@@ -124,6 +126,7 @@ let state: State = {
   tray: [],
   micOn: false,
   carrying: false,
+  pasteCatch: false,
   recording: null,
   boxMode: false,
   textEdit: null,
@@ -1001,10 +1004,10 @@ export function ensureWave(id: string): void {
 }
 
 /** Ctrl+V / Cmd+V: the browser hands over the clipboard with the paste event, so no permission question is asked. Same result as Add > On current time > Clipboard. */
-export async function pasteFromEvent(dt: DataTransfer | null, mode: AddMode = 'time'): Promise<boolean> {
+export async function pasteFromEvent(dt: DataTransfer | null, mode: AddMode = 'time', toTray = true): Promise<boolean> {
   if (!dt) return false;
   const files = [...dt.files].filter((f) => /^(image|video|audio)\//.test(f.type) || isImageFile(f) || isAudioFile(f));
-  if (files.length) return (await importFiles(files, mode), true);
+  if (files.length) return (toTray && files.length > 1 ? set({ tray: files, sheet: 'import', drawer: null }) : await importFiles(files, mode), true);
   const text = dt.getData('text/plain').trim();
   if (text) return (await addTextClip(mode, text), true);
   return false;
@@ -1018,11 +1021,22 @@ export async function pasteClipboard(mode: AddMode, toTray = false): Promise<voi
       const files: File[] = [];
       let text: string | null = null;
       for (const it of items) {
-        const media = it.types.find((t) => /^(image|video|audio)\//.test(t));
-        if (media) {
-          const blob = await it.getType(media);
-          files.push(new File([blob], `Pasted.${media.split('/')[1]!.split('+')[0]}`, { type: media }));
-        } else if (it.types.includes('text/plain')) text = await (await it.getType('text/plain')).text();
+        let media = it.types.find((t) => /^(image|video|audio)\//.test(t));
+        let blob: Blob | null = media ? await it.getType(media) : null;
+        if (!blob) {
+          // some systems name the kind of a copied file in their own way: whatever is not text is tried, and the file itself says what it is
+          for (const t of it.types.filter((t) => !/^text\//.test(t))) {
+            try {
+              const b2 = await it.getType(t);
+              if (/^(image|video|audio)\//.test(b2.type)) (blob = b2), (media = b2.type);
+              if (blob) break;
+            } catch {
+              /* not readable */
+            }
+          }
+        }
+        if (blob && media) files.push(new File([blob], `Pasted ${files.length + 1}.${media.split('/')[1]!.split('+')[0]}`, { type: media }));
+        else if (it.types.includes('text/plain')) text = await (await it.getType('text/plain')).text();
       }
       if (files.length) return void (toTray && files.length > 1 ? set({ tray: files, sheet: 'import', drawer: null }) : await importFiles(files, mode));
       if (text?.trim()) return void (await addTextClip(mode, text.trim()));
@@ -1030,9 +1044,11 @@ export async function pasteClipboard(mode: AddMode, toTray = false): Promise<voi
       const t = (await navigator.clipboard.readText()).trim();
       if (t) return void (await addTextClip(mode, t));
     }
-    // files copied in a file manager are not readable by a button (only a real Ctrl+V hands them over)
-    toast(typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches ? 'Nothing readable on the clipboard. For copied files, press Ctrl+V (Cmd+V) instead.' : 'The clipboard has no picture, video, sound or text.');
+    // several copied files are not always handed over to a button (only a real paste gives them all): a box opens where the paste is done by hand
+    if (typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches) toast('Nothing readable on the clipboard. For copied files, press Ctrl+V (Cmd+V) instead.');
+    else set({ pasteCatch: true });
   } catch {
-    toast("The clipboard could not be read. Allow pasting when the browser asks, then try again.");
+    if (typeof matchMedia === 'function' && matchMedia('(pointer: fine)').matches) toast("The clipboard could not be read. Allow pasting when the browser asks, then try again.");
+    else set({ pasteCatch: true });
   }
 }

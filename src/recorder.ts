@@ -184,6 +184,8 @@ export async function playTake(): Promise<void> {
     kind = 'take';
     takeAt = Math.round(g.playhead * 100) / 100;
     if (!(await begin())) return void (kind = 'panel');
+    // the mic was switched off again while the permission was being asked
+    if (!getState().micOn) return void (cancelRecording(), set({ recording: null }));
     set({ recording: { at: takeAt } });
   } else resumeRecording();
   starting = true;

@@ -1,4 +1,5 @@
 import { createPortal } from 'preact/compat';
+import { blockOtherFingers } from './block.ts';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { dragCtl, endDrop } from '../dropAim.ts';
 import { engine } from '../engine.ts';
@@ -105,7 +106,7 @@ function Tray({ files }: { files: File[] }) {
   // (it comes back a moment after the drop, not at once: the drop closes the tab, and that must not be seen as a panel sliding out)
   useEffect(() => {
     const cl = document.documentElement.classList;
-    set({ carrying: !!drag });
+    set({ carrying: drag ? 'tray' : false });
     if (drag) return void cl.add('tray-drag');
     const id = window.setTimeout(() => cl.remove('tray-drag'), 450);
     return () => clearTimeout(id);
@@ -117,19 +118,10 @@ function Tray({ files }: { files: File[] }) {
     },
     [],
   );
-  // while the card is carried, no other finger works on the app: every touch and pointer event of any other finger is swallowed before it reaches the timeline
+  // while the card is carried, no other finger works on the app (the carrying finger keeps its pointer, so its events come from the card)
   useEffect(() => {
     if (!drag) return;
-    const block = (e: Event) => {
-      const id = (e as PointerEvent).pointerId;
-      if (id !== undefined && id === st.current?.id) return; // the carrying finger
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    };
-    const opts = { capture: true, passive: false } as const;
-    const names = ['pointerdown', 'pointermove', 'pointerup', 'touchstart', 'touchmove', 'touchend', 'touchcancel', 'gesturestart', 'gesturechange'];
-    names.forEach((n) => window.addEventListener(n, block, opts));
-    return () => names.forEach((n) => window.removeEventListener(n, block, opts));
+    return blockOtherFingers((el) => !!el.closest('.tray-card'));
   }, [!!drag]);
 
   const down = (e: PointerEvent) => {

@@ -499,7 +499,8 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     if (i < 0) return deselect();
     if (st0.multi.length > 0) return toggleMulti(i);
     if (i !== st0.selected) return selectClip(i, { keepPlayhead: true });
-    // tapping the picked picture again does nothing: select mode and edit mode are switched with the button in the middle bar
+    // tapping the picked picture again switches between select mode and edit mode (the strip in the timeline does the same)
+    set({ handles: !st0.handles });
   };
   /** a finger held still on empty canvas or on a strip that is not the picked one starts (or grows) a multi-selection */
   const holdPick = (cx: number, cy: number, selBefore: number) => {
@@ -893,29 +894,13 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     tap.current = null;
     flush();
     if (tp && !tp.moved && !tp.multi && performance.now() - tp.t < 300) {
-      const lt = lastTap.current;
-      if (lt && tp.t - lt.t < DOUBLE_MS + 60 && Math.hypot(tp.x - lt.x, tp.y - lt.y) < 40) {
-        lastTap.current = null;
-        clearTimeout(cropTimer.current);
-        // a double tap works on what was selected before it: the first touch of the pair must not have switched the selection
-        if (lt.prevMulti.length > 0) setMulti(lt.prevMulti);
-        else if (getState().selected !== lt.prev || getState().multi.length > 0) (lt.prev >= 0 ? selectClip(lt.prev, { keepPlayhead: true }) : deselect());
-        set({ handles: lt.prevHandles });
-        doubleTap(lt.x, lt.y);
-      } else {
-        const prev = getState().selected;
-        const prevMulti = getState().multi;
-        const prevHandles = getState().handles;
-        if (autoPicked.current) {
-          // this touch already picked the picture on touch-down: it must not also swap select and edit mode
-          // a double tap then works on that picture (it stays picked), in select mode
-          lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev: getState().selected, prevMulti: [], prevHandles: false };
-          autoPicked.current = false;
-          return;
-        }
-        pickAt(tp.x, tp.y);
-        lastTap.current = { t: tp.t, x: tp.x, y: tp.y, prev, prevMulti, prevHandles };
+      // a single tap: picks the picture under the finger; on the picked picture it switches between select mode and edit mode
+      if (autoPicked.current) {
+        // this touch already picked the picture on touch-down: it must not also switch the mode
+        autoPicked.current = false;
+        return;
       }
+      pickAt(tp.x, tp.y);
     }
   };
   /** snaps to the closest of the eight tidy placements (quarter turn x fit/fill); again flips fit/fill */
@@ -995,7 +980,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     showBadge(s === sFit ? 'Fit' : 'Fill');
     window.setTimeout(() => !fine.current && showBadge(''), 700);
   };
-  const doubleTap = (cx: number, cy: number) => {
+  const doubleTap = (cx: number, cy: number, fitOnly = false) => {
     void cx;
     void cy;
     hapticDouble();
@@ -1009,7 +994,7 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     const clip = st.project.clips[i];
     const media = clip && st.project.media[clip.mediaId];
     if (!clip || !media || media.kind === 'audio') return;
-    if (st.handles) {
+    if (st.handles && !fitOnly) {
       // edit mode: a double tap gives the cut-off parts back and puts the picture at its start position
       resetTransform(i);
       say('Reset');
@@ -1029,11 +1014,11 @@ function Gestures({ boxW, boxH }: { boxW: number; boxH: number }) {
     window.setTimeout(() => !fine.current && showBadge(''), 700);
   };
   useEffect(() => {
-    handleDouble = () => doubleTap(0, 0);
+    handleDouble = null;
     handleSingle = null;
+    fitFillNow = () => doubleTap(0, 0, true);
     return () => {
-      handleDouble = null;
-      handleSingle = null;
+      fitFillNow = null;
     };
   });
   const wheel = (e: WheelEvent) => {
@@ -1110,6 +1095,9 @@ function showLines(frame: HTMLElement | null | undefined, x: number | null, y: n
 
 /** a double tap on a transform handle does what a double tap on the picture does (the picture may be too small to hit) */
 let handleDouble: (() => void) | null = null;
+let fitFillNow: (() => void) | null = null;
+/** the button of the middle bar: the picked picture(s) switch between fit and fill */
+export const fitFill = (): void => fitFillNow?.();
 let handleSingle: (() => void) | null = null;
 let lastHandleTap = 0;
 function handleTapped(): void {

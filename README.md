@@ -95,14 +95,14 @@ MIT. See [LICENSE](LICENSE).
 ## Import, recording, taps
 
 - **Import tab** (first tab with nothing selected): Media, Text, Color, Clipboard. One item is placed at once; several wait as a pile of thumbnails (videos already get their preview copies) that is dragged onto the timeline or the preview; the outline shows the landing place and a yellow line joins it to the finger on touch screens.
-- **Tapping a strip**: select (and the yellow line glides to it), tap again to zoom to its length, tap again to deselect; once zoomed, every tap toggles selection.
+- **Tapping a strip**: 1st tap selects (the yellow line glides to it), 2nd tap goes into edit mode and zooms the strip to the middle of the timeline, 3rd tap goes back to select mode and the earlier zoom (unless changed by hand). The picked picture in the preview toggles the mode in the same way. The button at the left of the middle bar is fit/fill. Seeking never deselects. No double-tap gestures are used (slider names reset with one tap).
 - **Dropping files from outside** (Files, Photos, another window): they are let go anywhere on the page and wait in the Import tab as a card, to be dragged to a place there.
 - Pictures, colors and texts can be made longer to the left in edit mode; a finger at the edge of the timeline scrolls it while an edge, or the Import card, is dragged.
 - **Volume** goes from 0 to 400 %.
 - While a video's preview copy is being made, the current frame is decoded at preview size (the copy pauses meanwhile), the last frame stays while seeking, and the moving light and note stay on top.
 
 ## Recording with the mic toggle
-With nothing selected the edit-mode button is a mic. Tap: record at once while the timeline plays (playback is muted); tap again: stop. Hold: record until you let go. Pause and Play pause and resume the same take; seeking ends it and its strip appears. The bottom bar shows the microphone level while recording and the output level (clip light) while playing; the other buttons of the middle bar are greyed.
+With nothing selected the button at the left of the middle bar is a mic. Tap: record at once while the timeline plays (playback is muted); tap again: stop. The middle bar shows Recording and the length of the take, the bottom bar the microphone level, and all other fingers are ignored meanwhile. Pause/Play pause and resume the same take; seeking ends it.
 
 ## Replace tab
 Selecting a strip adds **Replace** as the first bottom tab: pick one media file, text, colour, clipboard item or a recording and it takes the place of the strip, keeping its position, length (where possible) and look.
